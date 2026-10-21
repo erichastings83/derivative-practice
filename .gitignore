@@ -1,0 +1,7 @@
+# Dependencies and OS files
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Large reference PDFs (not part of the web application)
+Gradescope Examples/
