@@ -1,3 +1,13 @@
+function escapeHtml(str) {
+    if (str === null || str === undefined) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
 function getStoredInt(key, defaultVal) {
     try {
         return parseInt(localStorage.getItem(key) || defaultVal, 10);
@@ -32,7 +42,8 @@ const state = {
     feedbackClass: '',
     waitingForNext: false,
     stepsRevealed: 0,
-    selectedRule: null
+    selectedRule: null,
+    currentInput: ''
 };
 
 function getXpForLevel(lvl) {
@@ -1130,15 +1141,33 @@ function render() {
                 </div>
                 
                 ${state.mode === 'ruleIdentification' ? `
+                ${state.waitingForNext ? `
+                <div class="submitted-answer-preview">
+                    <span class="preview-label">Your Submitted Answer:</span>
+                    <code class="preview-text">${escapeHtml(state.currentInput)}</code>
+                </div>
+                ` : ''}
                 <div class="input-group" style="display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap;">
-                    <button class="btn ${state.selectedRule === 'basic' ? 'selected' : ''}" onclick="selectRule('basic')" style="background: ${state.selectedRule === 'basic' ? '#2563eb' : '#1e293b'}; border: 2px solid ${state.selectedRule === 'basic' ? '#3b82f6' : '#334155'};">Basic Rules</button>
-                    <button class="btn ${state.selectedRule === 'product' ? 'selected' : ''}" onclick="selectRule('product')" style="background: ${state.selectedRule === 'product' ? '#2563eb' : '#1e293b'}; border: 2px solid ${state.selectedRule === 'product' ? '#3b82f6' : '#334155'};">Product Rule</button>
-                    <button class="btn ${state.selectedRule === 'quotient' ? 'selected' : ''}" onclick="selectRule('quotient')" style="background: ${state.selectedRule === 'quotient' ? '#2563eb' : '#1e293b'}; border: 2px solid ${state.selectedRule === 'quotient' ? '#3b82f6' : '#334155'};">Quotient Rule</button>
-                    <button class="btn ${state.selectedRule === 'chain' ? 'selected' : ''}" onclick="selectRule('chain')" style="background: ${state.selectedRule === 'chain' ? '#2563eb' : '#1e293b'}; border: 2px solid ${state.selectedRule === 'chain' ? '#3b82f6' : '#334155'};">Chain Rule</button>
+                    <button class="btn ${state.selectedRule === 'basic' ? 'selected' : ''}" onclick="selectRule('basic')" style="background: ${state.selectedRule === 'basic' ? '#2563eb' : '#1e293b'}; border: 2px solid ${state.selectedRule === 'basic' ? '#3b82f6' : '#334155'};" ${state.waitingForNext ? 'disabled' : ''}>Basic Rules</button>
+                    <button class="btn ${state.selectedRule === 'product' ? 'selected' : ''}" onclick="selectRule('product')" style="background: ${state.selectedRule === 'product' ? '#2563eb' : '#1e293b'}; border: 2px solid ${state.selectedRule === 'product' ? '#3b82f6' : '#334155'};" ${state.waitingForNext ? 'disabled' : ''}>Product Rule</button>
+                    <button class="btn ${state.selectedRule === 'quotient' ? 'selected' : ''}" onclick="selectRule('quotient')" style="background: ${state.selectedRule === 'quotient' ? '#2563eb' : '#1e293b'}; border: 2px solid ${state.selectedRule === 'quotient' ? '#3b82f6' : '#334155'};" ${state.waitingForNext ? 'disabled' : ''}>Quotient Rule</button>
+                    <button class="btn ${state.selectedRule === 'chain' ? 'selected' : ''}" onclick="selectRule('chain')" style="background: ${state.selectedRule === 'chain' ? '#2563eb' : '#1e293b'}; border: 2px solid ${state.selectedRule === 'chain' ? '#3b82f6' : '#334155'};" ${state.waitingForNext ? 'disabled' : ''}>Chain Rule</button>
                 </div>
                 ` : `
                 <div class="input-group">
-                    <input type="text" id="answer-input" placeholder="Type derivative (e.g. 2*x + 3)" autocomplete="off" />
+                    ${state.waitingForNext ? `
+                    <div class="submitted-answer-preview">
+                        <span class="preview-label">Your Submitted Answer:</span>
+                        <code class="preview-text">${escapeHtml(state.currentInput)}</code>
+                    </div>
+                    ` : ''}
+                    <input type="text"
+                           id="answer-input"
+                           placeholder="Type derivative (e.g. 2*x + 3)"
+                           autocomplete="off"
+                           value="${escapeHtml(state.currentInput || '')}"
+                           ${state.waitingForNext ? 'readonly tabindex="-1"' : ''}
+                           class="${state.waitingForNext ? 'input-success' : (state.feedbackClass === 'incorrect' ? 'input-error' : '')}" />
                 </div>
                 `}
                 
@@ -1151,7 +1180,9 @@ function render() {
                     <button class="btn" id="solution-btn" style="background: #ef4444; margin-left: 0.5rem;" onclick="showSolution()">Show Solution</button>
                     ` : ''}
                     ` : ''}
-                    <button class="btn" id="next-btn" style="display: ${state.waitingForNext ? 'inline-block' : 'none'}; background: #64748b; margin-left: 0.5rem;">Next Problem</button>
+                    <button class="btn btn-next" id="next-btn" style="display: ${state.waitingForNext ? 'inline-flex' : 'none'}; margin-left: 0.5rem;">
+                        Next Problem → <span class="key-hint">[Enter]</span>
+                    </button>
                 </div>
                 
                 <div id="feedback-msg" class="feedback ${state.feedbackClass}">${state.feedbackText}</div>
@@ -1272,24 +1303,37 @@ function render() {
         
         const ansInput = document.getElementById('answer-input');
         if (ansInput) {
+            ansInput.addEventListener('input', (e) => {
+                state.currentInput = e.target.value;
+                if (state.feedbackClass === 'incorrect') {
+                    ansInput.classList.remove('input-error');
+                }
+            });
             ansInput.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') {
-                    const sb = document.getElementById('submit-btn');
-                    if (sb && sb.style.display !== 'none') {
+                    if (!state.waitingForNext) {
                         handleSubmit();
                     } else {
                         nextProblem();
                     }
                 }
             });
+            
+            // Focus input & select text on incorrect for easy editing
+            if (!state.waitingForNext) {
+                ansInput.focus();
+                if (state.feedbackClass === 'incorrect') {
+                    ansInput.select();
+                }
+            }
         }
         
         const nxtBtn = document.getElementById('next-btn');
-        if (nxtBtn) nxtBtn.addEventListener('click', nextProblem);
-        
-        // Focus input
-        if (ansInput && !state.waitingForNext) {
-            ansInput.focus();
+        if (nxtBtn) {
+            nxtBtn.addEventListener('click', nextProblem);
+            if (state.waitingForNext) {
+                nxtBtn.focus();
+            }
         }
     }
 }
@@ -1459,6 +1503,7 @@ function nextProblem() {
     state.waitingForNext = false;
     state.stepsRevealed = 0;
     state.selectedRule = null;
+    state.currentInput = '';
     if (state.mode === 'practice' && state.timerActive && state.practiceTimeLimit > 0) {
         state.timeLeft = state.practiceTimeLimit;
         state.timeUp = false;
@@ -1469,20 +1514,31 @@ function nextProblem() {
 function handleSubmit() {
     let isCorrect = false;
     let processedInput = "";
+    let rawInput = "";
     
     if (state.mode === 'ruleIdentification') {
         if (!state.selectedRule) return;
+        const ruleNames = {
+            basic: 'Basic Rules',
+            product: 'Product Rule',
+            quotient: 'Quotient Rule',
+            chain: 'Chain Rule'
+        };
+        rawInput = ruleNames[state.selectedRule] || state.selectedRule;
+        state.currentInput = rawInput;
         isCorrect = (state.selectedRule === state.problem.rule);
     } else {
         const inputEl = document.getElementById('answer-input');
         if (!inputEl) return;
-        const input = inputEl.value;
-        if (!input.trim()) return;
+        rawInput = inputEl.value;
+        if (!rawInput.trim()) return;
         
-        processedInput = input.replace(/\bln\b/g, 'log');
+        state.currentInput = rawInput;
+        
+        processedInput = rawInput.replace(/\bln\b/g, 'log');
         const checkResult = checkEquivalence(processedInput, state.problem.correctExpr, state.problem.varName);
         if (checkResult.error === 'parse_error') {
-            state.feedbackText = 'Could not parse your answer — check syntax.';
+            state.feedbackText = `<span class="wrong-answer-echo">"${escapeHtml(rawInput)}"</span> could not be parsed. Check your syntax and try again.`;
             state.feedbackClass = 'incorrect';
             render();
             return;
@@ -1508,7 +1564,7 @@ function handleSubmit() {
         while (state.xp >= getXpForLevel(state.level)) {
             state.xp -= getXpForLevel(state.level);
             state.level += 1;
-            levelUpMsg = ' 🎊 LEVEL UP! 🎊';
+            levelUpMsg = ' • 🎊 LEVEL UP!';
             document.body.classList.add('flash-gold');
             setTimeout(() => document.body.classList.remove('flash-gold'), 600);
         }
@@ -1521,11 +1577,24 @@ function handleSubmit() {
         saveStats();
         
         let comboMsg = '';
-        if (state.streak >= 3) comboMsg = ' 🔥 COMBO!';
+        if (state.streak >= 3) comboMsg = ' • 🔥 COMBO!';
         
         state.waitingForNext = true;
         state.stepsRevealed = state.problem.steps.length;
-        state.feedbackText = `Correct! +${points} points${comboMsg}${levelUpMsg}`;
+        
+        state.feedbackText = `
+            <div class="feedback-correct-card">
+                <div class="feedback-correct-badge">
+                    <span class="feedback-icon">🎉</span>
+                    <span class="feedback-title">CORRECT!</span>
+                </div>
+                <div class="feedback-details">
+                    <span class="feedback-points">+${points} points</span>
+                    ${comboMsg ? `<span class="feedback-combo">${comboMsg}</span>` : ''}
+                    ${levelUpMsg ? `<span class="feedback-levelup">${levelUpMsg}</span>` : ''}
+                </div>
+            </div>
+        `;
         state.feedbackClass = 'correct';
         render();
         const nb = document.getElementById('next-btn');
@@ -1549,7 +1618,7 @@ function handleSubmit() {
             }
         }
         
-        state.feedbackText = 'Incorrect. Try again!';
+        state.feedbackText = `<span class="wrong-answer-echo">"${escapeHtml(rawInput)}"</span> is incorrect. Try again!`;
         state.feedbackClass = 'incorrect';
         render();
     }
@@ -1558,12 +1627,16 @@ function handleSubmit() {
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     document.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && state.waitingForNext && !state.gameOver) {
+            e.preventDefault();
+            nextProblem();
+            return;
+        }
         if (state.mode === 'ruleIdentification' && !state.gameOver) {
             if (e.key === '1') { window.selectRule('basic'); return; }
             if (e.key === '2') { window.selectRule('product'); return; }
             if (e.key === '3') { window.selectRule('quotient'); return; }
             if (e.key === '4') { window.selectRule('chain'); return; }
-            if (e.key === 'Enter' && state.waitingForNext) { nextProblem(); return; }
             if (e.key === 'Enter' && state.selectedRule && !state.waitingForNext) { handleSubmit(); return; }
         }
     });
