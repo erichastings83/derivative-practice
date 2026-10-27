@@ -43,6 +43,7 @@ const state = {
     waitingForNext: false,
     stepsRevealed: 0,
     selectedRule: null,
+    selectedQuizOption: null,
     currentInput: '',
     lastSubmitTime: 0
 };
@@ -1000,6 +1001,139 @@ const generators = {
     }
 };
 
+function getCorrectTex(steps, expr, v) {
+    if (steps && steps.length > 0) {
+        const lastStep = steps[steps.length - 1];
+        const match = lastStep.match(/\$([^\$]+)\$/);
+        if (match) return match[1].trim();
+    }
+    try {
+        return math.derivative(expr, v).toTex();
+    } catch(e) {
+        return '0';
+    }
+}
+
+function createDistractorFromError(tex, variant = 0) {
+    if (!tex) return null;
+    let dist = tex;
+    if (variant === 0) {
+        if (dist.includes(' + ')) {
+            dist = dist.replace(' + ', ' - ');
+        } else if (dist.includes(' - ')) {
+            dist = dist.replace(' - ', ' + ');
+        } else if (dist.startsWith('-')) {
+            dist = dist.substring(1).trim();
+        } else {
+            dist = '-' + dist;
+        }
+    } else if (variant === 1) {
+        if (dist.includes('\\sin') && !dist.includes('\\cos')) {
+            dist = dist.replace(/\\sin/g, '\\cos');
+        } else if (dist.includes('\\cos') && !dist.includes('\\sin')) {
+            dist = dist.replace(/\\cos/g, '\\sin');
+        } else if (/\b([2-9])\b/.test(dist)) {
+            dist = dist.replace(/\b([2-9])\b/, (m) => String(parseInt(m, 10) + 1));
+        } else if (/\^\{?([2-9])\}?/.test(dist)) {
+            dist = dist.replace(/\^\{?([2-9])\}?/, (m, p) => `^{${parseInt(p, 10) + 1}}`);
+        } else {
+            dist = dist.startsWith('-') ? dist.substring(1).trim() : '-' + dist;
+        }
+    } else {
+        if (dist.includes('^2')) {
+            dist = dist.replace('^2', '');
+        } else if (/\^\{?([2-9])\}?/.test(dist)) {
+            dist = dist.replace(/\^\{?([2-9])\}?/, (m, p) => `^{${Math.max(1, parseInt(p, 10) - 1)}}`);
+        } else if (dist.includes('+')) {
+            dist = dist.replace('+', '-');
+        } else {
+            dist = `2 \\left(${dist}\\right)`;
+        }
+    }
+    return (dist !== tex) ? dist : null;
+}
+
+function generateDistractors(rule, varName, difficulty, correctTex, count = 3) {
+    const list = new Set();
+    
+    // 1. Try targeted calculus variations
+    for (let variant = 0; variant < 3; variant++) {
+        const errTex = createDistractorFromError(correctTex, variant);
+        if (errTex && errTex !== correctTex && !list.has(errTex)) {
+            list.add(errTex);
+        }
+    }
+    
+    // 2. Sibling problem derivatives
+    let retries = 12;
+    while (list.size < count && retries-- > 0) {
+        try {
+            const siblingGen = generators[rule].generate(varName, difficulty);
+            if (siblingGen && siblingGen.steps && siblingGen.steps.length > 0) {
+                const lastStep = siblingGen.steps[siblingGen.steps.length - 1];
+                const match = lastStep.match(/\$([^\$]+)\$/);
+                if (match) {
+                    const sibTex = match[1].trim();
+                    if (sibTex !== correctTex && !list.has(sibTex)) {
+                        list.add(sibTex);
+                    }
+                }
+            }
+        } catch(e) {}
+    }
+    
+    // 3. Fallback if still under count
+    let mult = 2;
+    while (list.size < count) {
+        const fb = `${mult} \\left(${correctTex}\\right)`;
+        if (!list.has(fb) && fb !== correctTex) {
+            list.add(fb);
+        }
+        mult++;
+    }
+    
+    return Array.from(list).slice(0, count);
+}
+
+function generateQuizOptions(rule, varName, difficulty, correctTex) {
+    const isNoneCorrect = (rnd(0, 3) === 0);
+    const distractors = generateDistractors(rule, varName, difficulty, correctTex, 3);
+    
+    let options = [];
+    let correctOptionId = 'D';
+    
+    if (isNoneCorrect) {
+        options = [
+            { id: 'A', text: distractors[0], isNone: false },
+            { id: 'B', text: distractors[1], isNone: false },
+            { id: 'C', text: distractors[2], isNone: false },
+            { id: 'D', text: 'None of the above', isNone: true }
+        ];
+        correctOptionId = 'D';
+    } else {
+        const letters = ['A', 'B', 'C'];
+        const correctLetter = letters[rnd(0, 2)];
+        let dIdx = 0;
+        
+        for (let l of letters) {
+            if (l === correctLetter) {
+                options.push({ id: l, text: correctTex, isNone: false });
+            } else {
+                options.push({ id: l, text: distractors[dIdx++], isNone: false });
+            }
+        }
+        options.push({ id: 'D', text: 'None of the above', isNone: true });
+        correctOptionId = correctLetter;
+    }
+    
+    return {
+        options,
+        correctOptionId,
+        isNoneCorrect,
+        correctTex
+    };
+}
+
 function generateProblem(retries = 20) {
     if (retries <= 0) {
         return {
@@ -1007,8 +1141,20 @@ function generateProblem(retries = 20) {
             tex: '\\text{Error generating problem. Please click Next Problem.}',
             steps: [],
             correctExpr: '0',
+            correctTex: '0',
             varName: 'x',
-            rule: 'basic'
+            rule: 'basic',
+            quizData: {
+                options: [
+                    { id: 'A', text: '0', isNone: false },
+                    { id: 'B', text: '1', isNone: false },
+                    { id: 'C', text: '-1', isNone: false },
+                    { id: 'D', text: 'None of the above', isNone: true }
+                ],
+                correctOptionId: 'A',
+                isNoneCorrect: false,
+                correctTex: '0'
+            }
         };
     }
     const activeRules = Object.keys(state.rules).filter(r => state.rules[r]);
@@ -1045,14 +1191,19 @@ function generateProblem(retries = 20) {
         displayTex = `\\text{If } ${notation.str} = ${tex}\\text{, what is } ${notation.derivStr}\\text{?}`;
     }
     
-    return {
+    const correctTex = getCorrectTex(steps, expr, v);
+    
+    const prob = {
         expr,
         tex: displayTex,
         steps,
         correctExpr: correctDerivativeNode.toString(),
+        correctTex,
         varName: v,
         rule
     };
+    prob.quizData = generateQuizOptions(rule, v, state.difficulty, correctTex);
+    return prob;
 }
 
 // Equivalence Checking
@@ -1154,6 +1305,41 @@ function render() {
                     <button class="btn ${state.selectedRule === 'quotient' ? 'selected' : ''}" onclick="selectRule('quotient')" style="background: ${state.selectedRule === 'quotient' ? '#2563eb' : '#1e293b'}; border: 2px solid ${state.selectedRule === 'quotient' ? '#3b82f6' : '#334155'};" ${state.waitingForNext ? 'disabled' : ''}>Quotient Rule</button>
                     <button class="btn ${state.selectedRule === 'chain' ? 'selected' : ''}" onclick="selectRule('chain')" style="background: ${state.selectedRule === 'chain' ? '#2563eb' : '#1e293b'}; border: 2px solid ${state.selectedRule === 'chain' ? '#3b82f6' : '#334155'};" ${state.waitingForNext ? 'disabled' : ''}>Chain Rule</button>
                 </div>
+                ` : state.mode === 'quiz' ? `
+                ${state.waitingForNext ? `
+                <div class="submitted-answer-preview">
+                    <span class="preview-label">Your Submitted Answer:</span>
+                    <code class="preview-text">${escapeHtml(state.currentInput)}</code>
+                </div>
+                ` : ''}
+                <div class="quiz-options-container">
+                    ${state.problem && state.problem.quizData ? state.problem.quizData.options.map(opt => {
+                        let isSelected = state.selectedQuizOption === opt.id;
+                        let isCorrect = state.waitingForNext && opt.id === state.problem.quizData.correctOptionId;
+                        let isWrongSelected = state.waitingForNext && isSelected && !isCorrect;
+                        
+                        let statusClass = '';
+                        if (isCorrect) statusClass = 'correct-opt';
+                        else if (isWrongSelected) statusClass = 'wrong-opt';
+                        else if (isSelected) statusClass = 'selected-opt';
+                        
+                        return `
+                        <button type="button"
+                                class="quiz-option-card ${statusClass}"
+                                onclick="selectQuizOption('${opt.id}')"
+                                ondblclick="selectQuizOption('${opt.id}'); handleSubmit();"
+                                ${state.waitingForNext ? 'disabled' : ''}
+                                id="quiz-opt-${opt.id}">
+                            <span class="quiz-opt-letter">${opt.id}</span>
+                            <div class="quiz-opt-body" id="quiz-opt-content-${opt.id}">
+                                ${opt.isNone ? '<span class="none-of-above-text">None of the above</span>' : ''}
+                            </div>
+                            ${isCorrect ? '<span class="quiz-opt-badge check">✓</span>' : ''}
+                            ${isWrongSelected ? '<span class="quiz-opt-badge cross">✗</span>' : ''}
+                        </button>
+                        `;
+                    }).join('') : ''}
+                </div>
                 ` : `
                 <div class="input-group">
                     ${state.waitingForNext ? `
@@ -1175,7 +1361,7 @@ function render() {
                 <div class="actions">
                     ${!state.waitingForNext ? `
                     <button class="btn" id="submit-btn">Check Answer</button>
-                    ${state.mode === 'practice' || state.mode === 'career' ? `
+                    ${state.mode === 'practice' || state.mode === 'career' || state.mode === 'quiz' ? `
                     <button class="btn" id="skip-btn" style="background: #64748b; margin-left: 0.5rem;">Skip Problem</button>
                     <button class="btn" id="hint-btn" style="background: #eab308; margin-left: 0.5rem;" onclick="showHint()">Hint</button>
                     <button class="btn" id="solution-btn" style="background: #ef4444; margin-left: 0.5rem;" onclick="showSolution()">Show Solution</button>
@@ -1213,6 +1399,10 @@ function render() {
                             Practice (Free Play, Unlocked)
                         </label>
                         <label>
+                            <input type="radio" name="mode" value="quiz" ${state.mode === 'quiz' ? 'checked' : ''} onchange="setMode('quiz')">
+                            Quiz (Multiple Choice)
+                        </label>
+                        <label>
                             <input type="radio" name="mode" value="career" ${state.mode === 'career' ? 'checked' : ''} onchange="setMode('career')">
                             Career (Level Up to Unlock)
                         </label>
@@ -1248,7 +1438,7 @@ function render() {
                         }).join('')}
                     </div>
                 </div>
-                ${state.mode === 'practice' || state.mode === 'career' ? `
+                ${state.mode === 'practice' || state.mode === 'career' || state.mode === 'quiz' ? `
                 ${state.mode === 'practice' ? `
                 <div class="options-section">
                     <h3>Practice Timer</h3>
@@ -1292,6 +1482,36 @@ function render() {
             throwOnError: false,
             displayMode: true
         });
+
+        // Render Quiz Mode Options
+        if (state.mode === 'quiz' && state.problem.quizData) {
+            state.problem.quizData.options.forEach(opt => {
+                if (!opt.isNone) {
+                    const optEl = document.getElementById(`quiz-opt-content-${opt.id}`);
+                    if (optEl) {
+                        try {
+                            katex.render(opt.text, optEl, {
+                                throwOnError: false,
+                                displayMode: true
+                            });
+                        } catch(e) {
+                            optEl.textContent = opt.text;
+                        }
+                    }
+                }
+            });
+
+            const mathRevealEl = document.getElementById('quiz-correct-math-reveal');
+            if (mathRevealEl) {
+                try {
+                    katex.render(state.problem.quizData.correctTex, mathRevealEl, {
+                        throwOnError: false
+                    });
+                } catch(e) {
+                    mathRevealEl.textContent = state.problem.quizData.correctTex;
+                }
+            }
+        }
     }
 
     // Event Listeners
@@ -1379,6 +1599,12 @@ window.toggleRule = function(rule) {
 window.selectRule = function(rule) {
     if (state.gameOver || state.waitingForNext) return;
     state.selectedRule = rule;
+    render();
+};
+
+window.selectQuizOption = function(optId) {
+    if (state.gameOver || state.waitingForNext) return;
+    state.selectedQuizOption = optId;
     render();
 };
 
@@ -1506,6 +1732,7 @@ function nextProblem() {
     state.waitingForNext = false;
     state.stepsRevealed = 0;
     state.selectedRule = null;
+    state.selectedQuizOption = null;
     state.currentInput = '';
     if (state.mode === 'practice' && state.timerActive && state.practiceTimeLimit > 0) {
         state.timeLeft = state.practiceTimeLimit;
@@ -1531,6 +1758,18 @@ function handleSubmit() {
         rawInput = ruleNames[state.selectedRule] || state.selectedRule;
         state.currentInput = rawInput;
         isCorrect = (state.selectedRule === state.problem.rule);
+    } else if (state.mode === 'quiz') {
+        if (!state.selectedQuizOption) {
+            state.feedbackText = 'Please select an option (A, B, C, or D) first.';
+            state.feedbackClass = 'incorrect';
+            render();
+            return;
+        }
+        const quizData = state.problem.quizData;
+        const chosenOpt = quizData.options.find(o => o.id === state.selectedQuizOption);
+        isCorrect = (state.selectedQuizOption === quizData.correctOptionId);
+        rawInput = `Option (${chosenOpt.id})${chosenOpt.isNone ? ': None of the above' : ''}`;
+        state.currentInput = rawInput;
     } else {
         const inputEl = document.getElementById('answer-input');
         if (!inputEl) return;
@@ -1586,6 +1825,16 @@ function handleSubmit() {
         state.waitingForNext = true;
         state.stepsRevealed = state.problem.steps.length;
         
+        let quizCorrectDetail = '';
+        if (state.mode === 'quiz') {
+            const quizData = state.problem.quizData;
+            if (quizData.isNoneCorrect) {
+                quizCorrectDetail = `<div style="margin-top: 0.6rem; font-size: 1.05rem; color: #a7f3d0;">Option (D) is correct! None of the choices matched the true derivative: <span id="quiz-correct-math-reveal"></span></div>`;
+            } else {
+                quizCorrectDetail = `<div style="margin-top: 0.5rem; font-size: 1.05rem; color: #a7f3d0;">Option (${quizData.correctOptionId}) is correct!</div>`;
+            }
+        }
+        
         state.feedbackText = `
             <div class="feedback-correct-card">
                 <div class="feedback-correct-badge">
@@ -1597,6 +1846,7 @@ function handleSubmit() {
                     ${comboMsg ? `<span class="feedback-combo">${comboMsg}</span>` : ''}
                     ${levelUpMsg ? `<span class="feedback-levelup">${levelUpMsg}</span>` : ''}
                 </div>
+                ${quizCorrectDetail}
             </div>
         `;
         state.feedbackClass = 'correct';
@@ -1646,12 +1896,24 @@ document.addEventListener('DOMContentLoaded', () => {
                 handleSubmit();
                 return;
             }
+            if (state.mode === 'quiz' && state.selectedQuizOption && !state.waitingForNext && !state.gameOver) {
+                e.preventDefault();
+                handleSubmit();
+                return;
+            }
         }
         if (state.mode === 'ruleIdentification' && !state.gameOver && !state.waitingForNext) {
             if (e.key === '1') { window.selectRule('basic'); return; }
             if (e.key === '2') { window.selectRule('product'); return; }
             if (e.key === '3') { window.selectRule('quotient'); return; }
             if (e.key === '4') { window.selectRule('chain'); return; }
+        }
+        if (state.mode === 'quiz' && !state.gameOver && !state.waitingForNext) {
+            const k = e.key.toUpperCase();
+            if (k === 'A' || k === '1') { window.selectQuizOption('A'); return; }
+            if (k === 'B' || k === '2') { window.selectQuizOption('B'); return; }
+            if (k === 'C' || k === '3') { window.selectQuizOption('C'); return; }
+            if (k === 'D' || k === '4') { window.selectQuizOption('D'); return; }
         }
     });
     nextProblem();
