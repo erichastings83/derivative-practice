@@ -1416,7 +1416,7 @@ function checkEquivalence(userExprStr, correctExprStr, varName) {
 // UI Rendering
 function render() {
     const existingInput = document.getElementById('answer-input');
-    if (existingInput && !state.waitingForNext) {
+    if (existingInput && !state.waitingForNext && !state.focusPending) {
         state.currentInput = existingInput.value;
     }
     
@@ -1934,6 +1934,8 @@ function nextProblem() {
     state.selectedQuizOption = null;
     state.currentInput = '';
     state.focusPending = true;
+    const oldInput = document.getElementById('answer-input');
+    if (oldInput) oldInput.value = '';
     if (state.mode === 'practice' && state.timerActive && state.practiceTimeLimit > 0) {
         state.timeLeft = state.practiceTimeLimit;
         state.timeUp = false;
