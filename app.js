@@ -10,7 +10,8 @@ function escapeHtml(str) {
 
 function getStoredInt(key, defaultVal) {
     try {
-        return parseInt(localStorage.getItem(key) || defaultVal, 10);
+        let v = parseInt(localStorage.getItem(key) || defaultVal, 10);
+        return isNaN(v) ? parseInt(defaultVal, 10) : v;
     } catch(e) {
         return parseInt(defaultVal, 10);
     }
@@ -1308,6 +1309,27 @@ function normalizeAnswer(s, varName) {
         str = str.split('=').pop().trim();
     }
     
+    // Strip LaTeX left/right delimiters
+    str = str.replace(/\\left|\\right/g, '');
+    
+    // Replace \cdot with *
+    str = str.replace(/\\cdot/g, '*');
+    
+    // Convert LaTeX fractions \frac{a}{b} -> ((a)/(b))
+    str = str.replace(/\\frac\{([^}]*)\}\{([^}]*)\}/g, '(($1)/($2))');
+    
+    // Convert LaTeX square roots \sqrt{a} -> sqrt(a)
+    str = str.replace(/\\sqrt\{([^}]*)\}/g, 'sqrt($1)');
+    
+    // Convert curly brace exponents x^{2} -> x^(2)
+    str = str.replace(/\^\{([^}]+)\}/g, '^($1)');
+    
+    // Convert square brackets [ ... ] to parentheses ( ... )
+    str = str.replace(/\[/g, '(').replace(/\]/g, ')');
+    
+    // Strip leading backslashes on standard math functions and constants
+    str = str.replace(/\\(sin|cos|tan|sec|csc|cot|log|ln|exp|sqrt|pi)/g, '$1');
+    
     // Replace ln with log
     str = str.replace(/\bln\b/g, 'log');
     
@@ -1318,10 +1340,10 @@ function normalizeAnswer(s, varName) {
     // Convert "cos x" -> "cos(x)"
     str = str.replace(/\b(sin|cos|tan|sec|csc|cot|log|exp)\s+([a-z0-9]+)/g, '$1($2)');
     
-    // Insert * between a number, the variable or ) and a following function name, e^ or (
-    str = str.replace(/([0-9a-z\)])\s*(sin|cos|tan|sec|csc|cot|log|exp)\b/g, '$1*$2');
-    str = str.replace(/([0-9a-z\)])\s*(e\^)/g, '$1*$2');
-    str = str.replace(/([0-9a-z\)])\s*\(/g, '$1*(');
+    // Insert * between a number, a single variable or ) and a following function name, e^ or (
+    str = str.replace(/([0-9\)]|\b[a-z]\b)\s*(sin|cos|tan|sec|csc|cot|log|exp)\b/g, '$1*$2');
+    str = str.replace(/([0-9\)]|\b[a-z]\b)\s*(e\^)/g, '$1*$2');
+    str = str.replace(/([0-9\)]|\b[a-z]\b)\s*\(/g, '$1*(');
     
     // Insert * after ) before a letter or digit
     str = str.replace(/\)\s*([0-9a-z])/g, ')*$1');
@@ -1920,6 +1942,7 @@ function nextProblem() {
 }
 
 function handleSubmit() {
+    if (!state.problem) return;
     state.lastSubmitTime = Date.now();
     let isCorrect = false;
     let processedInput = "";
@@ -2058,6 +2081,10 @@ function handleSubmit() {
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     document.addEventListener('keydown', (e) => {
+        // Prevent hotkeys from firing if typing in a non-answer input field
+        if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') && e.target.id !== 'answer-input') {
+            return;
+        }
         if (e.key === 'Enter') {
             if (state.waitingForNext && !state.gameOver) {
                 if (e.repeat || (Date.now() - (state.lastSubmitTime || 0) < 250)) {
