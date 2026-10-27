@@ -43,7 +43,8 @@ const state = {
     waitingForNext: false,
     stepsRevealed: 0,
     selectedRule: null,
-    currentInput: ''
+    currentInput: '',
+    lastSubmitTime: 0
 };
 
 function getXpForLevel(lvl) {
@@ -1311,9 +1312,11 @@ function render() {
             });
             ansInput.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') {
+                    e.preventDefault();
+                    e.stopPropagation();
                     if (!state.waitingForNext) {
                         handleSubmit();
-                    } else {
+                    } else if (Date.now() - (state.lastSubmitTime || 0) > 250) {
                         nextProblem();
                     }
                 }
@@ -1512,6 +1515,7 @@ function nextProblem() {
 }
 
 function handleSubmit() {
+    state.lastSubmitTime = Date.now();
     let isCorrect = false;
     let processedInput = "";
     let rawInput = "";
@@ -1627,17 +1631,27 @@ function handleSubmit() {
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && state.waitingForNext && !state.gameOver) {
-            e.preventDefault();
-            nextProblem();
-            return;
+        if (e.key === 'Enter') {
+            if (state.waitingForNext && !state.gameOver) {
+                if (e.repeat || (Date.now() - (state.lastSubmitTime || 0) < 250)) {
+                    e.preventDefault();
+                    return;
+                }
+                e.preventDefault();
+                nextProblem();
+                return;
+            }
+            if (state.mode === 'ruleIdentification' && state.selectedRule && !state.waitingForNext && !state.gameOver) {
+                e.preventDefault();
+                handleSubmit();
+                return;
+            }
         }
-        if (state.mode === 'ruleIdentification' && !state.gameOver) {
+        if (state.mode === 'ruleIdentification' && !state.gameOver && !state.waitingForNext) {
             if (e.key === '1') { window.selectRule('basic'); return; }
             if (e.key === '2') { window.selectRule('product'); return; }
             if (e.key === '3') { window.selectRule('quotient'); return; }
             if (e.key === '4') { window.selectRule('chain'); return; }
-            if (e.key === 'Enter' && state.selectedRule && !state.waitingForNext) { handleSubmit(); return; }
         }
     });
     nextProblem();
