@@ -187,11 +187,39 @@ function multiplyParts(partsA, partsB) {
                 if (!tex) {
                     tex = f;
                 } else {
-                    tex += (tex.endsWith('}') || f.startsWith('\\') ? '' : '') + f;
+                    let sep = '';
+                    if (/[0-9]$/.test(tex) && /^[0-9]/.test(f)) {
+                        sep = ' \\cdot ';
+                    }
+                    tex += sep + f;
                 }
             }
             
             res.push(createPart(n, d, tex, combinedFactors));
+        }
+    }
+    return res;
+}
+
+function combineSameTex(parts) {
+    if (!parts || parts.length === 0) return [];
+    const map = new Map();
+    for (let p of parts) {
+        if (!p || p.num === 0) continue;
+        const key = p.tex || '';
+        if (!map.has(key)) {
+            map.set(key, { num: p.num, den: p.den, tex: p.tex, factors: [...(p.factors || [])] });
+        } else {
+            const existing = map.get(key);
+            const sum = fracAdd({ n: existing.num, d: existing.den }, { n: p.num, d: p.den });
+            existing.num = sum.n;
+            existing.den = sum.d;
+        }
+    }
+    const res = [];
+    for (let p of map.values()) {
+        if (p.num !== 0) {
+            res.push(createPart(p.num, p.den, p.tex, p.factors));
         }
     }
     return res;
@@ -382,7 +410,16 @@ function partsToTex(parts) {
             }
         }
         
-        let numStr = n !== 1 || modifiedTex === '' ? n + modifiedTex : modifiedTex;
+        let numStr;
+        if (n !== 1 || modifiedTex === '') {
+            if (n !== 1 && modifiedTex !== '' && /^[0-9]/.test(modifiedTex)) {
+                numStr = `${n} \\cdot ${modifiedTex}`;
+            } else {
+                numStr = n + modifiedTex;
+            }
+        } else {
+            numStr = modifiedTex;
+        }
         let denStr = d !== 1 || extDen === '' ? (d === 1 ? '' : d) + extDen : extDen;
         
         let termTex = denStr === '' ? numStr : `\\frac{${numStr}}{${denStr}}`;
@@ -458,7 +495,7 @@ function getTerm(v, diff, allowConst = true, forceCoeff1 = false) {
                 nTex = `${num}`;
             } else {
                 nStr = `${num}/${den}`;
-                nTex = num < 0 ? `-\\frac{${abs(num)}}{${den}}` : `\\frac{${num}}{${den}}`;
+                nTex = `\\frac{${num}}{${den}}`;
             }
             
             dNum = num - den;
@@ -470,7 +507,7 @@ function getTerm(v, diff, allowConst = true, forceCoeff1 = false) {
             if (dDenSimp === 1) {
                 dTexExp = `${dNumSimp}`;
             } else {
-                dTexExp = dNumSimp < 0 ? `-\\frac{${abs(dNumSimp)}}{${dDenSimp}}` : `\\frac{${dNumSimp}}{${dDenSimp}}`;
+                dTexExp = `\\frac{${dNumSimp}}{${dDenSimp}}`;
             }
         } else {
             num = diff === 'easy' ? rnz(2, 4) : rnz(-5, 5);
@@ -571,7 +608,7 @@ function getTerm(v, diff, allowConst = true, forceCoeff1 = false) {
             const num = rnz(-10, 10);
             cExpr = `${num}`; cTex = `${num}`;
         }
-        parts = [createPart(1, 1, cTex)];
+        parts = [cType === 'int' ? createPart(Number(cExpr), 1, '') : createPart(1, 1, cTex)];
         dParts = [];
         return { 
             expr: cExpr, parts, dExpr: '0', dParts, 
@@ -601,14 +638,32 @@ const generators = {
                     const a = rnz(-5, 5), b = rnz(-5, 5);
                     const n = rnd(3, 6), m = rnd(1, 2), k = rnd(1, 4);
                     const expr = `(${a}*${v}^${n} + ${b}*${v}^${m}) / (${v}^${k})`;
-                    const tex = `\\frac{${a}${v}^{${n}} ${b > 0 ? '+' : '-'} ${abs(b)}${v}^{${m}}}{${v}^{${k}}}`;
-                    const simpTex1 = `\\frac{${a}${v}^{${n}}}{${v}^{${k}}} ${b > 0 ? '+' : '-'} \\frac{${abs(b)}${v}^{${m}}}{${v}^{${k}}}`;
                     
-                    const formatPow = (pow) => pow == 0 ? '' : (pow == 1 ? v : `${v}^{${pow}}`);
-                    const simpTex2 = `${a}${formatPow(n-k)} ${b > 0 ? '+' : '-'} ${abs(b)}${formatPow(m-k)}`;
-                    const da = a*(n-k);
-                    const db = b*(m-k);
-                    let dParts = [createPart(da, 1, formatPow(n-k-1)), createPart(db, 1, formatPow(m-k-1))];
+                    const numParts = [
+                        createPart(a, 1, formatPolyPower(n.toString(), v)),
+                        createPart(b, 1, formatPolyPower(m.toString(), v))
+                    ];
+                    const denPart = createPart(1, 1, formatPolyPower(k.toString(), v));
+                    const denTex = partsToTex([denPart]);
+                    const tex = `\\frac{${partsToTex(numParts)}}{${denTex}}`;
+                    
+                    const t1Tex = `\\frac{${partsToTex([numParts[0]])}}{${denTex}}`;
+                    const t2Num = createPart(abs(b), 1, formatPolyPower(m.toString(), v));
+                    const t2Tex = `\\frac{${partsToTex([t2Num])}}{${denTex}}`;
+                    const simpTex1 = `${t1Tex} ${b > 0 ? '+' : '-'} ${t2Tex}`;
+                    
+                    const simpParts = [
+                        createPart(a, 1, formatPolyPower((n - k).toString(), v)),
+                        createPart(b, 1, formatPolyPower((m - k).toString(), v))
+                    ];
+                    const simpTex2 = partsToTex(simpParts);
+                    
+                    const da = a * (n - k);
+                    const db = b * (m - k);
+                    let dParts = combineSameTex([
+                        createPart(da, 1, formatPolyPower((n - k - 1).toString(), v)),
+                        createPart(db, 1, formatPolyPower((m - k - 1).toString(), v))
+                    ]);
                     
                     const steps = [
                         "Simplify the expression first by dividing each term by the denominator.",
@@ -617,7 +672,7 @@ const generators = {
                         "Now apply the Power Rule to each term.",
                         `Final Answer: $ ${partsToTex(dParts)} $`
                     ];
-                    return { expr, tex, dExpr: `(${da}*${v}^${n-k-1} + ${db}*${v}^${m-k-1})`, steps };
+                    return { expr, tex, dExpr: `(${da}*${v}^${n-k-1} + ${db}*${v}^${m-k-1})`, steps, rules: ['basic', 'quotient'] };
                 }
             }
             
@@ -690,13 +745,13 @@ const generators = {
                         `Now, apply the Power Rule term by term.`,
                         `Final Answer: $ ${partsToTex(allDParts)} $`
                     ];
-                    return { expr, tex, dExpr, steps };
+                    return { expr, tex, dExpr, steps, rules: ['product', 'basic'] };
                 }
                 
                 let p1 = multiplyParts(multiplyParts(u1.dParts, u2.parts), u3.parts);
                 let p2 = multiplyParts(multiplyParts(u1.parts, u2.dParts), u3.parts);
                 let p3 = multiplyParts(multiplyParts(u1.parts, u2.parts), u3.dParts);
-                let allDParts = addParts(addParts(p1, p2), p3);
+                let allDParts = combineSameTex(addParts(addParts(p1, p2), p3));
                 
                 const steps = [
                     "Use the generalized Product Rule for three functions: $(uvw)' = u'vw + uv'w + uvw'$",
@@ -741,12 +796,12 @@ const generators = {
                     `Now, apply the Power Rule term by term.`,
                     `Final Answer: $ ${partsToTex(allDParts)} $`
                 ];
-                return { expr, tex, dExpr, steps };
+                return { expr, tex, dExpr, steps, rules: ['product', 'basic'] };
             }
             
             let term1 = multiplyParts(duParts, wParts);
             let term2 = multiplyParts(uParts, dwParts);
-            let allDParts = addParts(term1, term2);
+            let allDParts = combineSameTex(addParts(term1, term2));
             
             const steps = [
                 `Use the Product Rule: $ \\frac{d}{d${v}}[A \\cdot B] = A'B + AB' $`,
@@ -811,7 +866,7 @@ const generators = {
                     `Now, apply the Power Rule term by term.`,
                     `Final Answer: $ ${partsToTex(allDParts)} $`
                 ];
-                return { expr, tex, dExpr, steps };
+                return { expr, tex, dExpr, steps, rules: ['quotient', 'basic'] };
             }
             
             let hiDLo = multiplyParts(duParts, wParts);
@@ -861,7 +916,10 @@ const generators = {
                     if (m) distributedTex = `${coeffSq}${v}^{${parseInt(m[1])*2}}`;
                     else {
                         m = f.match(/^([0-9]+)\^([a-z])$/);
-                        if (m) distributedTex = `${coeffSq}${m[1]}^{2${m[2]}}`;
+                        if (m) {
+                            let sep = coeffSq !== '' && /^[0-9]/.test(m[1]) ? ' \\cdot ' : '';
+                            distributedTex = `${coeffSq}${sep}${m[1]}^{2${m[2]}}`;
+                        }
                         else {
                             m = f.match(new RegExp(`^${v}\\^\\{\\\\frac\\{([0-9-]+)\\}\\{([0-9]+)\\}\\}$`));
                             if (m) {
@@ -912,6 +970,27 @@ const generators = {
                     outerTypes = ['exp', 'trig', 'log']; // Prevent (-t^3)^2 or (-2e^y)^2 from being generated
                 }
             }
+            
+            // Check that inner expression is positive at one or more test points before keeping log
+            const testPts = [-3, -2, -1, -0.5, 0.5, 1, 2, 3];
+            let innerHasPositive = false;
+            try {
+                const compiledInner = math.compile(innerExpr);
+                for (let pt of testPts) {
+                    try {
+                        const val = compiledInner.evaluate({ [v]: pt });
+                        if (typeof val === 'number' && !isNaN(val) && isFinite(val) && val > 0) {
+                            innerHasPositive = true;
+                            break;
+                        }
+                    } catch(e) {}
+                }
+            } catch(e) {}
+            if (!innerHasPositive) {
+                outerTypes = outerTypes.filter(t => t !== 'log');
+                if (outerTypes.length === 0) outerTypes = ['exp'];
+            }
+            
             const oType = outerTypes[rnd(0, outerTypes.length - 1)];
             
             let expr, tex, dExpr, dOuterParts;
@@ -1053,11 +1132,11 @@ function createDistractorFromError(tex, variant = 0) {
     return (dist !== tex) ? dist : null;
 }
 
-function generateDistractors(rule, varName, difficulty, correctTex, count = 3) {
+function generateDistractors(rule, varName, difficulty, correctTex, count = 4) {
     const list = new Set();
     
     // 1. Try targeted calculus variations
-    for (let variant = 0; variant < 3; variant++) {
+    for (let variant = 0; variant < 4; variant++) {
         const errTex = createDistractorFromError(correctTex, variant);
         if (errTex && errTex !== correctTex && !list.has(errTex)) {
             list.add(errTex);
@@ -1065,7 +1144,7 @@ function generateDistractors(rule, varName, difficulty, correctTex, count = 3) {
     }
     
     // 2. Sibling problem derivatives
-    let retries = 12;
+    let retries = 15;
     while (list.size < count && retries-- > 0) {
         try {
             const siblingGen = generators[rule].generate(varName, difficulty);
@@ -1096,23 +1175,25 @@ function generateDistractors(rule, varName, difficulty, correctTex, count = 3) {
 }
 
 function generateQuizOptions(rule, varName, difficulty, correctTex) {
+    // 20% to 25% of the time, "None of the above" (E) is the correct answer
     const isNoneCorrect = (rnd(0, 3) === 0);
-    const distractors = generateDistractors(rule, varName, difficulty, correctTex, 3);
+    const distractors = generateDistractors(rule, varName, difficulty, correctTex, 4);
     
     let options = [];
-    let correctOptionId = 'D';
+    let correctOptionId = 'E';
     
     if (isNoneCorrect) {
         options = [
             { id: 'A', text: distractors[0], isNone: false },
             { id: 'B', text: distractors[1], isNone: false },
             { id: 'C', text: distractors[2], isNone: false },
-            { id: 'D', text: 'None of the above', isNone: true }
+            { id: 'D', text: distractors[3], isNone: false },
+            { id: 'E', text: 'None of the above', isNone: true }
         ];
-        correctOptionId = 'D';
+        correctOptionId = 'E';
     } else {
-        const letters = ['A', 'B', 'C'];
-        const correctLetter = letters[rnd(0, 2)];
+        const letters = ['A', 'B', 'C', 'D'];
+        const correctLetter = letters[rnd(0, 3)];
         let dIdx = 0;
         
         for (let l of letters) {
@@ -1122,7 +1203,7 @@ function generateQuizOptions(rule, varName, difficulty, correctTex) {
                 options.push({ id: l, text: distractors[dIdx++], isNone: false });
             }
         }
-        options.push({ id: 'D', text: 'None of the above', isNone: true });
+        options.push({ id: 'E', text: 'None of the above', isNone: true });
         correctOptionId = correctLetter;
     }
     
@@ -1149,7 +1230,8 @@ function generateProblem(retries = 20) {
                     { id: 'A', text: '0', isNone: false },
                     { id: 'B', text: '1', isNone: false },
                     { id: 'C', text: '-1', isNone: false },
-                    { id: 'D', text: 'None of the above', isNone: true }
+                    { id: 'D', text: '2', isNone: false },
+                    { id: 'E', text: 'None of the above', isNone: true }
                 ],
                 correctOptionId: 'A',
                 isNoneCorrect: false,
@@ -1185,10 +1267,18 @@ function generateProblem(retries = 20) {
     }
     
     let displayTex;
-    if (notation.type === 'd') {
-        displayTex = `${notation.str}\\left[ ${tex} \\right]`;
+    if (state.mode === 'ruleIdentification') {
+        if (notation.type === 'd') {
+            displayTex = `\\text{For } ${notation.str}\\left[ ${tex} \\right]\\text{, which rule does this need?}`;
+        } else {
+            displayTex = `\\text{If } ${notation.str} = ${tex}\\text{, which rule does this need?}`;
+        }
     } else {
-        displayTex = `\\text{If } ${notation.str} = ${tex}\\text{, what is } ${notation.derivStr}\\text{?}`;
+        if (notation.type === 'd') {
+            displayTex = `${notation.str}\\left[ ${tex} \\right]`;
+        } else {
+            displayTex = `\\text{If } ${notation.str} = ${tex}\\text{, what is } ${notation.derivStr}\\text{?}`;
+        }
     }
     
     const correctTex = getCorrectTex(steps, expr, v);
@@ -1200,17 +1290,53 @@ function generateProblem(retries = 20) {
         correctExpr: correctDerivativeNode.toString(),
         correctTex,
         varName: v,
-        rule
+        rule,
+        rules: gen.rules || [rule]
     };
     prob.quizData = generateQuizOptions(rule, v, state.difficulty, correctTex);
     return prob;
 }
 
-// Equivalence Checking
+// Answer Normalization & Equivalence Checking
+function normalizeAnswer(s, varName) {
+    if (!s) return '';
+    let str = s.toLowerCase().trim();
+    
+    // Strip leading "dy/dx =", "y' =", "f'(x) =", "d/dx [...] =" prefix
+    str = str.replace(/^(?:d[a-z]\/d[a-z]|[a-z]'\([a-z]\)|[a-z]'|[a-z]\([a-z]\))\s*=\s*/i, '');
+    if (str.includes('=')) {
+        str = str.split('=').pop().trim();
+    }
+    
+    // Replace ln with log
+    str = str.replace(/\bln\b/g, 'log');
+    
+    // Convert sin^2(x) -> sin(x)^2, etc.
+    str = str.replace(/\b(sin|cos|tan|sec|csc|cot)\^([0-9]+)\s*\(([^)]+)\)/g, '$1($3)^$2');
+    str = str.replace(/\b(sin|cos|tan|sec|csc|cot)\^([0-9]+)\s*([a-z0-9]+)/g, '$1($3)^$2');
+    
+    // Convert "cos x" -> "cos(x)"
+    str = str.replace(/\b(sin|cos|tan|sec|csc|cot|log|exp)\s+([a-z0-9]+)/g, '$1($2)');
+    
+    // Insert * between a number, the variable or ) and a following function name, e^ or (
+    str = str.replace(/([0-9a-z\)])\s*(sin|cos|tan|sec|csc|cot|log|exp)\b/g, '$1*$2');
+    str = str.replace(/([0-9a-z\)])\s*(e\^)/g, '$1*$2');
+    str = str.replace(/([0-9a-z\)])\s*\(/g, '$1*(');
+    
+    // Insert * after ) before a letter or digit
+    str = str.replace(/\)\s*([0-9a-z])/g, ')*$1');
+    
+    // Insert * between number and letter: e.g. 2x -> 2*x
+    str = str.replace(/([0-9])\s*([a-z])/g, '$1*$2');
+    
+    return str;
+}
+
 function checkEquivalence(userExprStr, correctExprStr, varName) {
+    const normalizedUser = normalizeAnswer(userExprStr, varName);
     let userNode;
     try {
-        userNode = math.parse(userExprStr);
+        userNode = math.parse(normalizedUser);
     } catch (e) {
         return { isCorrect: false, error: 'parse_error' };
     }
@@ -1221,18 +1347,42 @@ function checkEquivalence(userExprStr, correctExprStr, varName) {
         const userCode = userNode.compile();
         const correctCode = correctNode.compile();
         
-        // Pick positive points to avoid imaginary results for fractional negative powers
-        const testPoints = [1.23, 2.71, 3.14, 0.5, 0.7];
+        const testPoints = [0.1, 0.3, 0.5, 0.7, 1.23, 2.71, 3.14];
+        let usablePoints = 0;
         
         for (let x of testPoints) {
             const scope = { [varName]: x };
-            const uVal = userCode.evaluate(scope);
-            const cVal = correctCode.evaluate(scope);
+            let uVal, cVal;
+            try {
+                cVal = correctCode.evaluate(scope);
+                uVal = userCode.evaluate(scope);
+            } catch(e) {
+                continue;
+            }
             
-            if (Math.abs(uVal - cVal) > 1e-5 || isNaN(uVal) || isNaN(cVal)) {
+            // Skip point if correct value is not finite or is NaN
+            if (typeof cVal !== 'number' || isNaN(cVal) || !isFinite(cVal)) {
+                continue;
+            }
+            
+            // If user's value is NaN or not finite, fail immediately
+            if (typeof uVal !== 'number' || isNaN(uVal) || !isFinite(uVal)) {
                 return { isCorrect: false };
             }
+            
+            // Relative error comparison: Math.abs(u - c) <= 1e-6 * Math.max(1, Math.abs(c))
+            const diff = Math.abs(uVal - cVal);
+            const tol = 1e-6 * Math.max(1, Math.abs(cVal));
+            if (diff > tol) {
+                return { isCorrect: false };
+            }
+            usablePoints++;
         }
+        
+        if (usablePoints < 3) {
+            return { isCorrect: false, error: 'eval_error' };
+        }
+        
         return { isCorrect: true };
     } catch(e) {
         return { isCorrect: false, error: 'eval_error' };
@@ -1243,6 +1393,11 @@ function checkEquivalence(userExprStr, correctExprStr, varName) {
 
 // UI Rendering
 function render() {
+    const existingInput = document.getElementById('answer-input');
+    if (existingInput && !state.waitingForNext) {
+        state.currentInput = existingInput.value;
+    }
+    
     let hearts = '';
     if (state.mode === 'survival') {
         hearts = '❤️'.repeat(state.lives) + '🖤'.repeat(3 - state.lives);
@@ -1352,6 +1507,9 @@ function render() {
                            id="answer-input"
                            placeholder="Type derivative (e.g. 2*x + 3)"
                            autocomplete="off"
+                           autocapitalize="off"
+                           autocorrect="off"
+                           spellcheck="false"
                            value="${escapeHtml(state.currentInput || '')}"
                            ${state.waitingForNext ? 'readonly tabindex="-1"' : ''}
                            class="${state.waitingForNext ? 'input-success' : (state.feedbackClass === 'incorrect' ? 'input-error' : '')}" />
@@ -1372,7 +1530,7 @@ function render() {
                     </button>
                 </div>
                 
-                <div id="feedback-msg" class="feedback ${state.feedbackClass}">${state.feedbackText}</div>
+                <div id="feedback-msg" class="feedback ${state.feedbackClass}" aria-live="polite" role="status">${state.feedbackText}</div>
 
                 <div id="steps-container" class="steps-container" style="display: ${state.stepsRevealed > 0 ? 'block' : 'none'};">
                     <h3 style="margin-bottom: 1rem; color: #cbd5e1; text-align: left;">Step-by-Step Guidance:</h3>
@@ -1438,7 +1596,6 @@ function render() {
                         }).join('')}
                     </div>
                 </div>
-                ${state.mode === 'practice' || state.mode === 'career' || state.mode === 'quiz' ? `
                 ${state.mode === 'practice' ? `
                 <div class="options-section">
                     <h3>Practice Timer</h3>
@@ -1470,18 +1627,19 @@ function render() {
                         }).join('')}
                     </div>
                 </div>
-                ` : ''}
             </div>
         </div>
     `;
 
     // Render Math
-    if (state.problem) {
+    if (state.problem && !state.gameOver) {
         const display = document.getElementById('math-display');
-        katex.render(state.problem.tex, display, {
-            throwOnError: false,
-            displayMode: true
-        });
+        if (display) {
+            katex.render(state.problem.tex, display, {
+                throwOnError: false,
+                displayMode: true
+            });
+        }
 
         // Render Quiz Mode Options
         if (state.mode === 'quiz' && state.problem.quizData) {
@@ -1542,20 +1700,25 @@ function render() {
                 }
             });
             
-            // Focus input & select text on incorrect for easy editing
-            if (!state.waitingForNext) {
+            // Focus input & select text on incorrect for easy editing (desktop only, new problem or wrong answer)
+            const isTouch = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+            if (!state.waitingForNext && !isTouch && (state.focusPending || state.feedbackClass === 'incorrect')) {
                 ansInput.focus();
                 if (state.feedbackClass === 'incorrect') {
                     ansInput.select();
                 }
             }
+            state.focusPending = false;
         }
         
         const nxtBtn = document.getElementById('next-btn');
         if (nxtBtn) {
             nxtBtn.addEventListener('click', nextProblem);
             if (state.waitingForNext) {
-                nxtBtn.focus();
+                setTimeout(() => {
+                    const b = document.getElementById('next-btn');
+                    if (b) b.focus();
+                }, 0);
             }
         }
     }
@@ -1587,6 +1750,7 @@ window.toggleRule = function(rule) {
     if (!Object.values(state.rules).some(v => v)) {
         state.rules[rule] = true;
         alert("At least one rule must be selected!");
+        render();
         return;
     }
     if (state.problem && !state.rules[state.problem.rule]) {
@@ -1615,6 +1779,9 @@ window.setDifficulty = function(diff) {
 
 window.setMode = function(mode) {
     if (mode === 'survival') return;
+    if (state.mode === 'practice') {
+        state.practiceRules = { ...state.rules };
+    }
     state.mode = mode;
     if (mode === 'career') {
         const ruleReqs = { basic: 1, product: 2, quotient: 4, chain: 6 };
@@ -1622,6 +1789,16 @@ window.setMode = function(mode) {
             if (state.level < ruleReqs[r]) state.rules[r] = false;
         }
         if (!Object.values(state.rules).some(v => v)) state.rules.basic = true;
+        
+        const diffReqs = { 'very hard': 8, hard: 5, medium: 3, easy: 1 };
+        if (state.level < (diffReqs[state.difficulty] || 1)) {
+            if (state.level >= 8) state.difficulty = 'very hard';
+            else if (state.level >= 5) state.difficulty = 'hard';
+            else if (state.level >= 3) state.difficulty = 'medium';
+            else state.difficulty = 'easy';
+        }
+    } else if (mode === 'practice' && state.practiceRules) {
+        state.rules = { ...state.practiceRules };
     }
     stopTimer();
     restartGame();
@@ -1734,6 +1911,7 @@ function nextProblem() {
     state.selectedRule = null;
     state.selectedQuizOption = null;
     state.currentInput = '';
+    state.focusPending = true;
     if (state.mode === 'practice' && state.timerActive && state.practiceTimeLimit > 0) {
         state.timeLeft = state.practiceTimeLimit;
         state.timeUp = false;
@@ -1757,10 +1935,10 @@ function handleSubmit() {
         };
         rawInput = ruleNames[state.selectedRule] || state.selectedRule;
         state.currentInput = rawInput;
-        isCorrect = (state.selectedRule === state.problem.rule);
+        isCorrect = (state.problem.rules || [state.problem.rule]).includes(state.selectedRule);
     } else if (state.mode === 'quiz') {
         if (!state.selectedQuizOption) {
-            state.feedbackText = 'Please select an option (A, B, C, or D) first.';
+            state.feedbackText = 'Please select an option (A, B, C, D, or E) first.';
             state.feedbackClass = 'incorrect';
             render();
             return;
@@ -1778,8 +1956,7 @@ function handleSubmit() {
         
         state.currentInput = rawInput;
         
-        processedInput = rawInput.replace(/\bln\b/g, 'log');
-        const checkResult = checkEquivalence(processedInput, state.problem.correctExpr, state.problem.varName);
+        const checkResult = checkEquivalence(rawInput, state.problem.correctExpr, state.problem.varName);
         if (checkResult.error === 'parse_error') {
             state.feedbackText = `<span class="wrong-answer-echo">"${escapeHtml(rawInput)}"</span> could not be parsed. Check your syntax and try again.`;
             state.feedbackClass = 'incorrect';
@@ -1829,7 +2006,7 @@ function handleSubmit() {
         if (state.mode === 'quiz') {
             const quizData = state.problem.quizData;
             if (quizData.isNoneCorrect) {
-                quizCorrectDetail = `<div style="margin-top: 0.6rem; font-size: 1.05rem; color: #a7f3d0;">Option (D) is correct! None of the choices matched the true derivative: <span id="quiz-correct-math-reveal"></span></div>`;
+                quizCorrectDetail = `<div style="margin-top: 0.6rem; font-size: 1.05rem; color: #a7f3d0;">Option (${quizData.correctOptionId}) is correct! None of the choices matched the true derivative: <span id="quiz-correct-math-reveal"></span></div>`;
             } else {
                 quizCorrectDetail = `<div style="margin-top: 0.5rem; font-size: 1.05rem; color: #a7f3d0;">Option (${quizData.correctOptionId}) is correct!</div>`;
             }
@@ -1914,6 +2091,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (k === 'B' || k === '2') { window.selectQuizOption('B'); return; }
             if (k === 'C' || k === '3') { window.selectQuizOption('C'); return; }
             if (k === 'D' || k === '4') { window.selectQuizOption('D'); return; }
+            if (k === 'E' || k === '5') { window.selectQuizOption('E'); return; }
         }
     });
     nextProblem();

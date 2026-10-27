@@ -26,6 +26,10 @@ body {
     align-items: center;
 }
 
+button, input, select, textarea {
+    font-family: var(--font-main);
+}
+
 #app {
     width: 100%;
     max-width: 1100px;
@@ -102,10 +106,16 @@ input[type="checkbox"], input[type="radio"] {
     border-radius: 12px;
     min-height: 120px;
     display: flex;
-    justify-content: center;
+    justify-content: flex-start;
     align-items: center;
+    position: relative;
     overflow-x: auto;
     overflow-y: hidden;
+}
+
+.problem-container > .katex-display {
+    margin-left: auto;
+    margin-right: auto;
 }
 
 .input-group {
@@ -414,6 +424,8 @@ input[type="checkbox"], input[type="radio"] {
     background: rgba(0, 0, 0, 0.15);
     border-radius: 12px;
     border-left: 3px solid var(--primary);
+    overflow-x: auto;
+    position: relative;
 }
 
 .steps-container h3 {
@@ -442,9 +454,16 @@ input[type="checkbox"], input[type="radio"] {
     width: 100%;
 }
 
+.quiz-options-container .quiz-option-card:nth-child(5) {
+    grid-column: 1 / -1;
+}
+
 @media (max-width: 700px) {
     .quiz-options-container {
         grid-template-columns: 1fr;
+    }
+    .quiz-options-container .quiz-option-card:nth-child(5) {
+        grid-column: 1;
     }
 }
 
