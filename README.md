@@ -4,7 +4,7 @@ An interactive web application for practicing derivative calculus, featuring mul
 
 ## Features
 
-- **Rule Coverage**: Practice basic derivative rules, product rule, quotient rule, and chain rule.
+- **Rule Coverage**: Practice basic derivative rules, product rule, quotient rule, chain rule (including multi-layer), and combined rules.
 - **Game Modes**:
   - *Practice Mode*: Untimed practice with immediate step-by-step breakdown.
   - *Time Attack / Survival*: Fast-paced challenge modes to test speed and accuracy.

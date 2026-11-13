@@ -22,7 +22,7 @@ function safeSetItem(key, val) {
 }
 
 const state = {
-    rules: { basic: true, product: true, quotient: true, chain: true },
+    rules: { basic: true, product: true, quotient: true, chain: true, combined: true },
     difficulty: 'easy', // easy, medium, hard, very hard
     mode: 'practice', // practice, survival
     lives: 3,
@@ -47,6 +47,15 @@ const state = {
     selectedQuizOption: null,
     currentInput: '',
     lastSubmitTime: 0
+};
+
+const RULE_REQS = { basic: 1, product: 2, quotient: 4, chain: 6, combined: 8 };
+const RULE_LABELS = {
+    basic: 'Basic Rules',
+    product: 'Product Rule',
+    quotient: 'Quotient Rule',
+    chain: 'Chain Rule',
+    combined: 'Combined Rules'
 };
 
 function getXpForLevel(lvl) {
@@ -191,6 +200,8 @@ function multiplyParts(partsA, partsB) {
                     let sep = '';
                     if (/[0-9]$/.test(tex) && /^[0-9]/.test(f)) {
                         sep = ' \\cdot ';
+                    } else if (/\\[a-zA-Z]+$/.test(tex)) {
+                        sep = ' '; // keep e.g. \pi from fusing with the next factor (\pie^{x})
                     }
                     tex += sep + f;
                 }
@@ -593,30 +604,89 @@ function getTerm(v, diff, allowConst = true, forceCoeff1 = false) {
     }
     
     if (type === 'const') {
-        const cTypes = ['pi', 'sqrt', 'e', 'int'];
-        const cType = cTypes[rnd(0, cTypes.length - 1)];
-        let cExpr, cTex;
-        if (cType === 'pi') {
-            const exp = rnd(2, 4);
-            cExpr = `(pi^${exp})`; cTex = `\\pi^{${exp}}`;
-        } else if (cType === 'sqrt') {
-            const num = rnd(2, 20);
-            cExpr = `(sqrt(${num}))`; cTex = `\\sqrt{${num}}`;
-        } else if (cType === 'e') {
-            const exp = rnd(2, 5);
-            cExpr = `(e^${exp})`; cTex = `e^{${exp}}`;
-        } else {
-            const num = rnz(-10, 10);
-            cExpr = `${num}`; cTex = `${num}`;
-        }
-        parts = [cType === 'int' ? createPart(Number(cExpr), 1, '') : createPart(1, 1, cTex)];
-        dParts = [];
-        return { 
-            expr: cExpr, parts, dExpr: '0', dParts, 
-            explanation: `Derivative of a constant ($ ${cTex} $) is $ 0 $.`, 
-            isConst: true, type 
+        return getConstTerm(true);
+    }
+}
+
+// Named constants (pi, e, cos(3), ln(2), ...) used as reminders that they differentiate like numbers
+function getNamedConstant() {
+    const makers = [
+        () => ({ expr: 'pi', tex: '\\pi' }),
+        () => ({ expr: 'e', tex: 'e' }),
+        () => { const n = rnd(2, 4); return { expr: `(pi^${n})`, tex: `\\pi^{${n}}` }; },
+        () => { const n = rnd(2, 5); return { expr: `(e^${n})`, tex: `e^{${n}}` }; },
+        () => { const n = [2, 3, 5, 6, 7, 10][rnd(0, 5)]; return { expr: `sqrt(${n})`, tex: `\\sqrt{${n}}` }; },
+        () => { const k = rnd(2, 9); return { expr: `sin(${k})`, tex: `\\sin(${k})` }; },
+        () => { const k = rnd(2, 9); return { expr: `cos(${k})`, tex: `\\cos(${k})` }; },
+        () => { const k = rnd(2, 10); return { expr: `log(${k})`, tex: `\\ln(${k})` }; }
+    ];
+    return makers[rnd(0, makers.length - 1)]();
+}
+
+// A standalone constant term, e.g. pi^2, -cos(3), 2ln(5), or an integer
+function getConstTerm(allowInt = true) {
+    if (allowInt && rnd(0, 4) === 0) {
+        const num = rnz(-10, 10);
+        return {
+            expr: `${num}`, parts: [createPart(num, 1, '')], dExpr: '0', dParts: [],
+            explanation: `Derivative of a constant ($ ${num} $) is $ 0 $.`,
+            isConst: true, type: 'const'
         };
     }
+    const c = getNamedConstant();
+    const coefPool = [1, 1, 1, -1, -1, 2, 3, -2, 4, 5];
+    const a = coefPool[rnd(0, coefPool.length - 1)];
+    const parts = [createPart(a, 1, c.tex)];
+    const tex = partsToTex(parts);
+    return {
+        expr: `(${a}*${c.expr})`, parts, dExpr: '0', dParts: [],
+        explanation: `$ ${tex} $ is a constant (there is no variable in it), so its derivative is $ 0 $.`,
+        isConst: true, type: 'const'
+    };
+}
+
+// A term with a named-constant coefficient or exponent, e.g. pi x^3, ln(2) x, cos(3) x^2, x^pi, x^e
+function getConstCoefTerm(v, diff) {
+    const a = rnd(0, 1) === 0 ? 1 : (diff === 'easy' ? rnz(-3, 3) : rnz(-5, 5));
+
+    if (rnd(0, 3) === 0) {
+        const usePi = rnd(0, 1) === 1;
+        const cExpr = usePi ? 'pi' : 'e';
+        const cTex = usePi ? '\\pi' : 'e';
+        const powTex = `${v}^{${cTex}}`;
+        const dPowTex = `${cTex} ${v}^{${cTex} - 1}`;
+        const parts = [createPart(a, 1, powTex)];
+        const dParts = [createPart(a, 1, dPowTex)];
+        const baseParts = [createPart(1, 1, powTex)];
+        const dBaseParts = [createPart(1, 1, dPowTex)];
+        const note = `The Power Rule works for any constant exponent, including $ ${cTex} $.`;
+        return {
+            expr: `(${a}*${v}^${cExpr})`, parts,
+            dExpr: `(${a}*${cExpr}*${v}^(${cExpr}-1))`, dParts, baseParts, dBaseParts,
+            explanation: `${note} Derivative of $ ${partsToTex(parts)} $ is $ ${partsToTex(dParts)} $`,
+            baseExplanation: `${note} Derivative of $ ${powTex} $ is $ ${dPowTex} $`,
+            isConst: false, type: 'constpow'
+        };
+    }
+
+    const c = getNamedConstant();
+    const n = diff === 'easy' ? rnd(1, 3) : rnd(1, 5);
+    const powTex = n === 1 ? v : `${v}^{${n}}`;
+    const dPowTex = n - 1 === 0 ? '' : (n - 1 === 1 ? v : `${v}^{${n - 1}}`);
+    const termTex = `${c.tex} ${powTex}`;
+    const dTermTex = dPowTex ? `${c.tex} ${dPowTex}` : c.tex;
+    const parts = [createPart(a, 1, termTex)];
+    const dParts = [createPart(a * n, 1, dTermTex)];
+    const baseParts = [createPart(1, 1, termTex)];
+    const dBaseParts = [createPart(n, 1, dTermTex)];
+    const note = `$ ${c.tex} $ is just a constant, so keep it as a coefficient and use the Power Rule.`;
+    return {
+        expr: n === 1 ? `(${a}*${c.expr}*${v})` : `(${a}*${c.expr}*${v}^${n})`, parts,
+        dExpr: `(${a * n}*${c.expr}*${v}^${n - 1})`, dParts, baseParts, dBaseParts,
+        explanation: `${note} Derivative of $ ${partsToTex(parts)} $ is $ ${partsToTex(dParts)} $`,
+        baseExplanation: `${note} Derivative of $ ${termTex} $ is $ ${partsToTex(dBaseParts)} $`,
+        isConst: false, type: 'constcoef'
+    };
 }
 
 function isTooSimilar(u, w) {
@@ -628,6 +698,308 @@ function isTooSimilar(u, w) {
         return uSin === wSin;
     }
     return false;
+}
+
+function isExprPositiveSomewhere(expr, v) {
+    const testPts = [-3, -2, -1, -0.5, 0.5, 1, 2, 3];
+    try {
+        const compiled = math.compile(expr);
+        for (let pt of testPts) {
+            try {
+                const val = compiled.evaluate({ [v]: pt });
+                if (typeof val === 'number' && !isNaN(val) && isFinite(val) && val > 0) {
+                    return true;
+                }
+            } catch(e) {}
+        }
+    } catch(e) {}
+    return false;
+}
+
+function termToNode(term) {
+    return {
+        expr: term.expr,
+        tex: partsToTex(term.parts),
+        dExpr: term.dExpr,
+        parts: term.parts,
+        dParts: term.dParts,
+        type: term.type
+    };
+}
+
+// Clean building-block terms modeled after the Gradescope practice sets
+function getSimpleTerm(v, diff, noHiddenChain = false) {
+    const kindPool = diff === 'easy'
+        ? ['linear', 'monomial', 'monomial']
+        : ['linear', 'linear', 'monomial', 'exp', 'trig', 'log'];
+    const kind = kindPool[rnd(0, kindPool.length - 1)];
+
+    if (kind === 'linear') {
+        const a = rnz(-6, 6);
+        const aTex = a === 1 ? '' : (a === -1 ? '-' : `${a}`);
+        if (rnd(0, 3) === 0) {
+            // Constant reminder inside the chain, e.g. sin(3x + pi) or (2x - ln(5))^3
+            const c = getNamedConstant();
+            const s = rnd(0, 1) === 1 ? 1 : -1;
+            return {
+                expr: `(${a}*${v} + ${s}*${c.expr})`,
+                tex: `${aTex}${v} ${s > 0 ? '+' : '-'} ${c.tex}`,
+                dExpr: `${a}`,
+                parts: [createPart(a, 1, v), createPart(s, 1, c.tex)],
+                dParts: [createPart(a, 1, '')],
+                type: 'linear'
+            };
+        }
+        const b = rnz(-8, 8);
+        const sign = b >= 0 ? '+' : '-';
+        const expr = `(${a}*${v} + ${b})`;
+        const tex = `${aTex}${v} ${sign} ${abs(b)}`;
+        return {
+            expr,
+            tex,
+            dExpr: `${a}`,
+            parts: [createPart(a, 1, v), createPart(b, 1, '')],
+            dParts: [createPart(a, 1, '')],
+            type: 'linear'
+        };
+    }
+
+    if (kind === 'monomial') {
+        const a = rnd(0, 2) === 0 ? 1 : rnz(-5, 5);
+        const n = diff === 'easy' ? rnd(1, 3) : rnd(1, 5);
+        const expr = n === 1 ? `(${a}*${v})` : `(${a}*${v}^${n})`;
+        const powTex = n === 1 ? v : `${v}^{${n}}`;
+        const dPowTex = n - 1 === 0 ? '' : (n - 1 === 1 ? v : `${v}^{${n - 1}}`);
+        return {
+            expr,
+            tex: partsToTex([createPart(a, 1, powTex)]),
+            dExpr: n === 1 ? `${a}` : `(${a * n}*${v}^${n - 1})`,
+            parts: [createPart(a, 1, powTex)],
+            dParts: [createPart(a * n, 1, dPowTex)],
+            type: 'power'
+        };
+    }
+
+    if (kind === 'exp') {
+        const a = rnd(0, 1) === 0 ? 1 : rnz(-4, 4);
+        const k = (diff === 'easy' || noHiddenChain) ? 1 : rnz(-3, 3);
+        const kTex = k === 1 ? v : (k === -1 ? `-${v}` : `${k}${v}`);
+        const expr = k === 1 ? `(${a}*e^${v})` : `(${a}*e^(${k}*${v}))`;
+        const dExpr = k === 1 ? `(${a}*e^${v})` : `(${a * k}*e^(${k}*${v}))`;
+        const eTex = `e^{${kTex}}`;
+        return {
+            expr,
+            tex: partsToTex([createPart(a, 1, eTex)]),
+            dExpr,
+            parts: [createPart(a, 1, eTex)],
+            dParts: [createPart(a * k, 1, eTex)],
+            type: 'exp'
+        };
+    }
+
+    if (kind === 'trig') {
+        const a = rnd(0, 1) === 0 ? 1 : rnz(-4, 4);
+        const isSin = rnd(0, 1) === 1;
+        const fn = isSin ? 'sin' : 'cos';
+        const dFnTex = isSin ? '\\cos' : '\\sin';
+        const expr = `(${a}*${fn}(${v}))`;
+        const dExpr = `(${a}*${isSin ? 'cos' : '(-sin)'}(${v}))`;
+        return {
+            expr,
+            tex: partsToTex([createPart(a, 1, `\\${fn}(${v})`)]),
+            dExpr,
+            parts: [createPart(a, 1, `\\${fn}(${v})`)],
+            dParts: [createPart(isSin ? a : -a, 1, `${dFnTex}(${v})`)],
+            type: 'trig'
+        };
+    }
+
+    // log
+    const a = rnd(0, 1) === 0 ? 1 : rnz(-4, 4);
+    return {
+        expr: `(${a}*log(${v}))`,
+        tex: partsToTex([createPart(a, 1, `\\ln(${v})`)]),
+        dExpr: `(${a}/${v})`,
+        parts: [createPart(a, 1, `\\ln(${v})`)],
+        dParts: [createPart(a, 1, `\\frac{1}{${v}}`)],
+        type: 'log'
+    };
+}
+
+function pickChainOuterType(innerNode, prevOuterType, v, allowPower = true, diff = 'medium') {
+    let outerTypes = ['power', 'exp', 'trig', 'log'];
+    if (!allowPower || prevOuterType === 'power' || prevOuterType === 'exp') {
+        outerTypes = outerTypes.filter(t => t !== 'power');
+    } else if (innerNode.parts && innerNode.parts.length === 1 && (checkPoly(innerNode.parts, v) || innerNode.type === 'exp')) {
+        outerTypes = outerTypes.filter(t => t !== 'power');
+    }
+    if (prevOuterType === 'exp') {
+        outerTypes = outerTypes.filter(t => t !== 'log');
+    }
+    if (innerNode.type === 'log' || prevOuterType === 'log') {
+        outerTypes = outerTypes.filter(t => t !== 'log');
+    }
+    if ((diff === 'easy' || diff === 'medium' || diff === 'hard') && (innerNode.type === 'trig' || prevOuterType === 'trig')) {
+        outerTypes = outerTypes.filter(t => t !== 'trig');
+    }
+    if (!isExprPositiveSomewhere(innerNode.expr, v)) {
+        outerTypes = outerTypes.filter(t => t !== 'log');
+    }
+    if (outerTypes.length === 0) outerTypes = ['trig', 'exp'];
+    return outerTypes[rnd(0, outerTypes.length - 1)];
+}
+
+function applySingleChainLayer(innerNode, oType, v, diff) {
+    let expr, tex, dExpr, dOuterParts, outerDesc, dParts;
+    const innerTex = innerNode.tex;
+
+    if (oType === 'power') {
+        const n = diff === 'easy' ? rnd(2, 3) : rnd(2, 5);
+        expr = `(${innerNode.expr})^${n}`;
+        tex = `\\left(${innerTex}\\right)^{${n}}`;
+        outerDesc = `u^{${n}}`;
+        const innerP = `\\left(${innerTex}\\right)`;
+        const dOuterTex = (n - 1 === 1) ? innerP : `${innerP}^{${n - 1}}`;
+        if (n - 1 === 1 && innerNode.parts && innerNode.parts.length === 1) {
+            dOuterParts = innerNode.parts.map(p => createPart(n * p.num, p.den, p.tex, p.factors));
+        } else {
+            dOuterParts = [createPart(n, 1, dOuterTex)];
+        }
+        dExpr = `(${n}*(${innerNode.expr})^${n - 1} * (${innerNode.dExpr}))`;
+        dParts = multiplyParts(dOuterParts, innerNode.dParts);
+    } else if (oType === 'exp') {
+        const base = ((diff === 'hard' || diff === 'very hard') && rnd(0, 1) === 1) ? rnd(2, 5) : 'e';
+        expr = `(${base}^(${innerNode.expr}))`;
+        tex = `${base}^{\\left(${innerTex}\\right)}`;
+        outerDesc = `${base}^{u}`;
+        if (base === 'e') {
+            dOuterParts = [createPart(1, 1, tex)];
+            dExpr = `(e^(${innerNode.expr}) * (${innerNode.dExpr}))`;
+        } else {
+            dOuterParts = [createPart(1, 1, `\\ln(${base})${tex}`)];
+            dExpr = `(log(${base})*${base}^(${innerNode.expr}) * (${innerNode.dExpr}))`;
+        }
+        dParts = multiplyParts(dOuterParts, innerNode.dParts);
+    } else if (oType === 'trig') {
+        const isSin = rnd(0, 1) === 1;
+        const trig = isSin ? 'sin' : 'cos';
+        const dTrig = isSin ? '\\cos' : '\\sin';
+        expr = `${trig}(${innerNode.expr})`;
+        tex = `\\${trig}\\left(${innerTex}\\right)`;
+        outerDesc = `\\${trig}(u)`;
+        dOuterParts = [createPart(isSin ? 1 : -1, 1, `${dTrig}\\left(${innerTex}\\right)`)];
+        dExpr = `(${isSin ? 'cos' : '-sin'}(${innerNode.expr}) * (${innerNode.dExpr}))`;
+        dParts = multiplyParts(dOuterParts, innerNode.dParts);
+    } else {
+        expr = `log(${innerNode.expr})`;
+        tex = `\\ln\\left(${innerTex}\\right)`;
+        outerDesc = `\\ln(u)`;
+        dOuterParts = [createPart(1, 1, `\\frac{1}{${innerTex}}`)];
+        dExpr = `(1/(${innerNode.expr}) * (${innerNode.dExpr}))`;
+
+        let iParts = innerNode.parts;
+        let diParts = innerNode.dParts;
+        if (iParts && iParts.length > 0 && diParts.length > 0 && iParts[0].num < 0 && diParts[0].num < 0) {
+            iParts = iParts.map(p => createPart(-p.num, p.den, p.tex, p.factors));
+            diParts = diParts.map(p => createPart(-p.num, p.den, p.tex, p.factors));
+        }
+        const cleanInnerTex = iParts ? partsToTex(iParts) : innerTex;
+        const dInnerTex = partsToTex(diParts);
+        const uPoly = iParts && checkPoly(iParts, v) && iParts.length === 1;
+        const duPoly = checkPoly(diParts, v);
+        if (uPoly && duPoly) {
+            dParts = combineLikeTerms(dividePolyParts(diParts, iParts[0], v), v);
+        } else if (cleanInnerTex === dInnerTex) {
+            dParts = [createPart(1, 1, '')];
+        } else {
+            dParts = [createPart(1, 1, `\\frac{${dInnerTex}}{${cleanInnerTex}}`)];
+        }
+    }
+
+    return {
+        expr,
+        tex,
+        dExpr,
+        parts: [createPart(1, 1, tex)],
+        dParts,
+        dOuterParts,
+        outerDesc,
+        oType,
+        innerTex
+    };
+}
+
+function buildChainNode(v, diff, layers = 1, forceSimpleCore = false) {
+    const numLayers = Math.max(1, Math.min(3, layers));
+    let curr;
+
+    if (numLayers >= 2 || forceSimpleCore || diff === 'easy') {
+        // Keep core free of hidden e^(kx) chains so total chain count stays <= 3
+        curr = getSimpleTerm(v, diff === 'easy' ? 'easy' : 'medium', true);
+    } else {
+        const inner = rnd(0, 1) === 0 ? getSimpleTerm(v, diff, true) : termToNode(getTerm(v, diff, false));
+        curr = inner;
+        if ((diff === 'hard' || diff === 'very hard') && rnd(0, 2) === 0) {
+            const inner2 = getSimpleTerm(v, diff, true);
+            const sumParts = addParts(inner.parts, inner2.parts);
+            const dSumParts = addParts(inner.dParts, inner2.dParts);
+            curr = {
+                expr: `(${inner.expr} + ${inner2.expr})`,
+                tex: partsToTex(sumParts),
+                dExpr: `(${inner.dExpr} + ${inner2.dExpr})`,
+                parts: sumParts,
+                dParts: dSumParts,
+                type: 'sum'
+            };
+        }
+    }
+
+    const baseNode = curr;
+    const layerInfo = [];
+    let prevOType = null;
+
+    for (let i = 0; i < numLayers; i++) {
+        const oType = pickChainOuterType(curr, prevOType, v, true, diff);
+        const next = applySingleChainLayer(curr, oType, v, diff);
+        layerInfo.push(next);
+        curr = next;
+        prevOType = oType;
+    }
+
+    let steps;
+    if (numLayers === 1) {
+        const only = layerInfo[0];
+        steps = [
+            `Use the Chain Rule: $ \\frac{d}{d${v}}[f(u)] = f'(u) \\cdot u' $`,
+            `The inner function is $ u = ${baseNode.tex} $`,
+            `Its derivative is $ u' = ${partsToTex(baseNode.dParts)} $`,
+            `The derivative of the outer function, leaving the inner function alone, is $ ${partsToTex(only.dOuterParts)} $`,
+            `Substitute into the Chain Rule $ f'(u) \\cdot u' $: $ \\left(${partsToTex(only.dOuterParts)}\\right)\\left(${partsToTex(baseNode.dParts)}\\right) $`,
+            `Final Answer (Combine and Simplify): $ ${partsToTex(curr.dParts)} $`
+        ];
+    } else {
+        steps = [
+            `Use the Chain Rule (${numLayers} times, working from the outside in): $ \\frac{d}{d${v}}[f(u)] = f'(u) \\cdot u' $`
+        ];
+        for (let i = layerInfo.length - 1; i >= 0; i--) {
+            const L = layerInfo[i];
+            steps.push(`Outer layer $ ${L.outerDesc} $ with $ u = ${L.innerTex} $ gives factor $ ${partsToTex(L.dOuterParts)} $`);
+        }
+        steps.push(`Innermost derivative: $ \\frac{d}{d${v}}\\left[${baseNode.tex}\\right] = ${partsToTex(baseNode.dParts)} $`);
+        const factorTex = layerInfo.slice().reverse().map(L => `\\left(${partsToTex(L.dOuterParts)}\\right)`).join('') + `\\left(${partsToTex(baseNode.dParts)}\\right)`;
+        steps.push(`Multiply all chain factors together: $ ${factorTex} $`);
+        steps.push(`Final Answer (Combine and Simplify): $ ${partsToTex(curr.dParts)} $`);
+    }
+
+    return {
+        expr: curr.expr,
+        tex: curr.tex,
+        dExpr: curr.dExpr,
+        parts: curr.parts,
+        dParts: curr.dParts,
+        steps,
+        layers: numLayers
+    };
 }
 
 const generators = {
@@ -687,6 +1059,14 @@ const generators = {
                 terms.push(getTerm(v, diff, i > 0 && diff !== 'easy')); // only allow const if not first term and not easy
             }
             
+            // Constant reminders: pi x^3, ln(2) x, x^e, and standalone constants like cos(3) or pi^2
+            if (Math.random() < (diff === 'easy' ? 0.3 : 0.4)) {
+                terms[rnd(0, terms.length - 1)] = getConstCoefTerm(v, diff);
+            }
+            if (!terms.some(t => t.isConst) && Math.random() < (diff === 'easy' ? 0.35 : 0.5)) {
+                terms.splice(rnd(1, terms.length), 0, getConstTerm(diff !== 'easy'));
+            }
+            
             const expr = terms.map(t => t.expr).join(' + ');
             let allParts = [];
             terms.forEach(t => allParts = addParts(allParts, t.parts));
@@ -697,9 +1077,9 @@ const generators = {
             terms.filter(t => !t.isConst).forEach(t => allDParts = addParts(allDParts, t.dParts));
             
             let steps = [];
-            if (numTerms > 1) {
+            if (terms.length > 1) {
                 steps.push("Use the Sum and Difference Rules to differentiate term by term.");
-                steps.push(...terms.filter(t => !t.isConst).map((t, i) => `Term ${i+1}: ${t.explanation}`));
+                steps.push(...terms.map((t, i) => `Term ${i+1}: ${t.explanation}`));
             } else {
                 let t = terms[0];
                 let num = abs(t.parts[0].num);
@@ -779,6 +1159,11 @@ const generators = {
                 uParts = addParts(u.parts, u2.parts);
                 duExpr = `(${u.dExpr} + ${u2.dExpr})`;
                 duParts = addParts(u.dParts, u2.dParts);
+            } else if (rnd(0, 3) === 0) {
+                // Constant reminder inside a factor, e.g. (x^2 + cos(3)) sin(x)
+                const c = getConstTerm(false);
+                uExpr = `(${u.expr} + ${c.expr})`;
+                uParts = addParts(u.parts, c.parts);
             }
             
             const expr = `(${uExpr}) * (${wExpr})`;
@@ -838,6 +1223,11 @@ const generators = {
                     dwExpr = `(${w.dExpr} + ${w2.dExpr})`;
                     dwParts = addParts(w.dParts, w2.dParts);
                 }
+            } else if (rnd(0, 3) === 0) {
+                // Constant reminder in the numerator, e.g. (e^x + ln(2)) / x^3
+                const c = getConstTerm(false);
+                uExpr = `(${u.expr} + ${c.expr})`;
+                uParts = addParts(u.parts, c.parts);
             }
             if (uParts.length > 0 && wParts.length > 0 && uParts[0].num < 0 && wParts[0].num < 0) {
                 uParts = uParts.map(p => createPart(-p.num, p.den, p.tex, p.factors));
@@ -954,129 +1344,188 @@ const generators = {
     },
     chain: {
         generate: (v, diff) => {
-            const inner = getTerm(v, diff, false);
-            let innerExpr = inner.expr, innerParts = inner.parts, dInnerExpr = inner.dExpr, dInnerParts = inner.dParts;
-            
-            if ((diff === 'hard' || diff === 'very hard') && rnd(0, 1) === 1) {
-                const inner2 = getTerm(v, diff, true);
-                innerExpr = `(${inner.expr} + ${inner2.expr})`;
-                innerParts = addParts(inner.parts, inner2.parts);
-                dInnerExpr = `(${inner.dExpr} + ${inner2.dExpr})`;
-                dInnerParts = addParts(inner.dParts, inner2.dParts);
-            }
-            
-            let outerTypes = ['power', 'exp', 'trig', 'log'];
-            if (innerParts.length === 1) {
-                if (checkPoly(innerParts, v) || inner.type === 'exp') {
-                    outerTypes = ['exp', 'trig', 'log']; // Prevent (-t^3)^2 or (-2e^y)^2 from being generated
-                }
-            }
-            
-            // Check that inner expression is positive at one or more test points before keeping log
-            const testPts = [-3, -2, -1, -0.5, 0.5, 1, 2, 3];
-            let innerHasPositive = false;
-            try {
-                const compiledInner = math.compile(innerExpr);
-                for (let pt of testPts) {
-                    try {
-                        const val = compiledInner.evaluate({ [v]: pt });
-                        if (typeof val === 'number' && !isNaN(val) && isFinite(val) && val > 0) {
-                            innerHasPositive = true;
-                            break;
-                        }
-                    } catch(e) {}
-                }
-            } catch(e) {}
-            if (!innerHasPositive) {
-                outerTypes = outerTypes.filter(t => t !== 'log');
-                if (outerTypes.length === 0) outerTypes = ['exp'];
-            }
-            
-            const oType = outerTypes[rnd(0, outerTypes.length - 1)];
-            
-            let expr, tex, dExpr, dOuterParts;
-            
-            if (oType === 'power') {
-                const n = diff === 'easy' ? rnd(2, 3) : rnd(2, 5);
-                expr = `(${innerExpr})^${n}`;
-                tex = `\\left(${partsToTex(innerParts)}\\right)^{${n}}`;
-                let innerP = `\\left(${partsToTex(innerParts)}\\right)`;
-                let dOuterTex = (n - 1 === 1) ? innerP : `${innerP}^{${n-1}}`;
-                if (n - 1 === 1 && innerParts.length === 1) {
-                    dOuterParts = innerParts.map(p => createPart(n * p.num, p.den, p.tex, p.factors));
-                } else {
-                    dOuterParts = [createPart(n, 1, dOuterTex)];
-                }
-                dExpr = `(${n}*(${innerExpr})^${n-1} * (${dInnerExpr}))`;
-            } else if (oType === 'exp') {
-                const base = ((diff === 'hard' || diff === 'very hard') && rnd(0, 1) === 1) ? rnd(2, 5) : 'e';
-                expr = `(${base}^(${innerExpr}))`;
-                tex = `${base}^{\\left(${partsToTex(innerParts)}\\right)}`;
-                if (base === 'e') {
-                    dOuterParts = [createPart(1, 1, `e^{\\left(${partsToTex(innerParts)}\\right)}`)];
-                    dExpr = `(e^(${innerExpr}) * (${dInnerExpr}))`;
-                } else {
-                    dOuterParts = [createPart(1, 1, `\\ln(${base})${base}^{\\left(${partsToTex(innerParts)}\\right)}`)];
-                    dExpr = `(log(${base})*${base}^(${innerExpr}) * (${dInnerExpr}))`;
-                }
-            } else if (oType === 'trig') {
-                const isSin = rnd(0, 1) === 1;
-                const trig = isSin ? 'sin' : 'cos';
-                const dTrig = isSin ? '\\cos' : '\\sin';
-                expr = `${trig}(${innerExpr})`;
-                tex = `\\${trig}\\left(${partsToTex(innerParts)}\\right)`;
-                dOuterParts = [createPart(isSin ? 1 : -1, 1, `${dTrig}\\left(${partsToTex(innerParts)}\\right)`)];
-                dExpr = `(${isSin ? 'cos' : '-sin'}(${innerExpr}) * (${dInnerExpr}))`;
+            let layers = 1;
+            if (diff === 'easy') {
+                layers = 1;
+            } else if (diff === 'medium') {
+                layers = Math.random() < 0.7 ? 1 : 2;
+            } else if (diff === 'hard') {
+                // Middle ground: 2-layer chains (or 1-layer with a richer inner expression), keeping 3-layer for Very Hard
+                layers = Math.random() < 0.8 ? 2 : 1;
             } else {
-                expr = `log(${innerExpr})`;
-                tex = `\\ln\\left(${partsToTex(innerParts)}\\right)`;
-                dOuterParts = [createPart(1, 1, `\\frac{1}{${partsToTex(innerParts)}}`)];
-                dExpr = `(1/(${innerExpr}) * (${dInnerExpr}))`;
+                layers = Math.random() < 0.3 ? 2 : 3;
             }
-            
+            const node = buildChainNode(v, diff, layers);
+            return { expr: node.expr, tex: node.tex, dExpr: node.dExpr, steps: node.steps };
+        }
+    },
+    combined: {
+        generate: (v, diff) => {
+            let patterns;
+            if (diff === 'easy') {
+                patterns = ['product_chain', 'quotient_chain'];
+            } else if (diff === 'medium') {
+                patterns = ['product_chain', 'quotient_chain'];
+            } else if (diff === 'hard') {
+                patterns = ['product_chain', 'quotient_chain', 'chain_product', 'quotient_product'];
+            } else {
+                patterns = ['product_chain', 'quotient_chain', 'chain_product', 'chain_quotient', 'quotient_product'];
+            }
+            const pattern = patterns[rnd(0, patterns.length - 1)];
+            const chainLayers = (diff === 'very hard' && rnd(0, 1) === 1) ? 2 : 1;
+
+            if (pattern === 'product_chain') {
+                const chainFirst = rnd(0, 1) === 1;
+                const bothChain = (diff === 'medium' && rnd(0, 2) === 0) || ((diff === 'hard' || diff === 'very hard') && rnd(0, 1) === 1);
+                const A = (chainFirst || bothChain) ? buildChainNode(v, diff, chainLayers, true) : getSimpleTerm(v, diff, true);
+                const B = (!chainFirst || bothChain) ? buildChainNode(v, diff, 1, true) : getSimpleTerm(v, diff, true);
+
+                const expr = `(${A.expr})*(${B.expr})`;
+                const tex = `\\left(${A.tex}\\right) \\left(${B.tex}\\right)`;
+                const dExpr = `(${A.dExpr})*(${B.expr}) + (${A.expr})*(${B.dExpr})`;
+                const term1 = multiplyParts(A.dParts, B.parts);
+                const term2 = multiplyParts(A.parts, B.dParts);
+                const allDParts = combineSameTex(addParts(term1, term2));
+
+                const steps = [
+                    `Use the Product Rule together with the Chain Rule: $ \\frac{d}{d${v}}[A \\cdot B] = A'B + AB' $`,
+                    `Identify $ A = ${A.tex} $ and $ B = ${B.tex} $`,
+                    `Differentiate each factor (applying the Chain Rule where needed): $ A' = ${partsToTex(A.dParts)} $ and $ B' = ${partsToTex(B.dParts)} $`,
+                    `Substitute into the Product Rule: $ \\left(${partsToTex(A.dParts)}\\right)\\left(${B.tex}\\right) + \\left(${A.tex}\\right)\\left(${partsToTex(B.dParts)}\\right) $`,
+                    `Final Answer (Combine and Simplify): $ ${partsToTex(allDParts)} $`
+                ];
+                return { expr, tex, dExpr, steps, rules: ['combined'] };
+            }
+
+            if (pattern === 'quotient_chain') {
+                const chainTop = rnd(0, 1) === 1;
+                const bothChain = (diff === 'medium' && rnd(0, 2) === 0) || ((diff === 'hard' || diff === 'very hard') && rnd(0, 1) === 1);
+                const Hi = (chainTop || bothChain) ? buildChainNode(v, diff, chainLayers, true) : getSimpleTerm(v, diff, true);
+                const Lo = (!chainTop || bothChain) ? buildChainNode(v, diff, 1, true) : getSimpleTerm(v, diff, true);
+
+                const expr = `(${Hi.expr})/(${Lo.expr})`;
+                const tex = `\\frac{${Hi.tex}}{${Lo.tex}}`;
+                const dExpr = `((${Hi.dExpr})*(${Lo.expr}) - (${Hi.expr})*(${Lo.dExpr}))/((${Lo.expr})^2)`;
+                const term1 = multiplyParts(Hi.dParts, Lo.parts);
+                const term2 = multiplyParts(Hi.parts, Lo.dParts);
+                const numParts = combineSameTex(subParts(term1, term2));
+                const numTex = partsToTex(numParts);
+                const finalTex = `\\frac{${numTex}}{\\left(${Lo.tex}\\right)^2}`;
+
+                const steps = [
+                    `Use the Quotient Rule together with the Chain Rule: $ \\frac{d}{d${v}}\\left[\\frac{\\text{Hi}}{\\text{Lo}}\\right] = \\frac{\\text{dHi}\\cdot\\text{Lo} - \\text{Hi}\\cdot\\text{dLo}}{\\text{Lo}^2} $`,
+                    `Identify $ \\text{Hi} = ${Hi.tex} $ and $ \\text{Lo} = ${Lo.tex} $`,
+                    `Differentiate each part (applying the Chain Rule where needed): $ \\text{dHi} = ${partsToTex(Hi.dParts)} $ and $ \\text{dLo} = ${partsToTex(Lo.dParts)} $`,
+                    `Form the numerator: $ \\text{dHi}\\cdot\\text{Lo} - \\text{Hi}\\cdot\\text{dLo} = ${numTex} $`,
+                    `Final Answer: $ ${finalTex} $`
+                ];
+                return { expr, tex, dExpr, steps, rules: ['combined'] };
+            }
+
+            if (pattern === 'chain_product') {
+                let uNode = getSimpleTerm(v, diff, true);
+                let wNode = getSimpleTerm(v, diff, true);
+                let tries = 0;
+                while (uNode.type === wNode.type && tries++ < 5) wNode = getSimpleTerm(v, diff, true);
+
+                const prodExpr = `(${uNode.expr})*(${wNode.expr})`;
+                const prodTex = `\\left(${uNode.tex}\\right)\\left(${wNode.tex}\\right)`;
+                const dProdExpr = `(${uNode.dExpr})*(${wNode.expr}) + (${uNode.expr})*(${wNode.dExpr})`;
+                const dProdParts = combineSameTex(addParts(
+                    multiplyParts(uNode.dParts, wNode.parts),
+                    multiplyParts(uNode.parts, wNode.dParts)
+                ));
+
+                const innerNode = {
+                    expr: prodExpr,
+                    tex: prodTex,
+                    dExpr: dProdExpr,
+                    parts: [createPart(1, 1, prodTex)],
+                    dParts: dProdParts,
+                    type: 'product'
+                };
+                const oType = pickChainOuterType(innerNode, null, v, true);
+                const outer = applySingleChainLayer(innerNode, oType, v, diff);
+
+                const steps = [
+                    `Use the Chain Rule with an inner Product Rule: $ \\frac{d}{d${v}}[f(u)] = f'(u) \\cdot u' $`,
+                    `The inner function is $ u = ${prodTex} $`,
+                    `Apply the Product Rule to find $ u' = ${partsToTex(dProdParts)} $`,
+                    `Multiply by the outer derivative $ f'(u) = ${partsToTex(outer.dOuterParts)} $`,
+                    `Final Answer (Combine and Simplify): $ ${partsToTex(outer.dParts)} $`
+                ];
+                return { expr: outer.expr, tex: outer.tex, dExpr: outer.dExpr, steps, rules: ['combined'] };
+            }
+
+            if (pattern === 'chain_quotient') {
+                const Hi = getSimpleTerm(v, diff, true);
+                let Lo = getSimpleTerm(v, diff, true);
+                let tries = 0;
+                while (Hi.type === Lo.type && tries++ < 4) Lo = getSimpleTerm(v, diff, true);
+
+                const quotExpr = `(${Hi.expr})/(${Lo.expr})`;
+                const quotTex = `\\frac{${Hi.tex}}{${Lo.tex}}`;
+                const dQuotExpr = `((${Hi.dExpr})*(${Lo.expr}) - (${Hi.expr})*(${Lo.dExpr}))/((${Lo.expr})^2)`;
+                const qNumParts = combineSameTex(subParts(
+                    multiplyParts(Hi.dParts, Lo.parts),
+                    multiplyParts(Hi.parts, Lo.dParts)
+                ));
+                const dQuotTex = `\\frac{${partsToTex(qNumParts)}}{\\left(${Lo.tex}\\right)^2}`;
+
+                const innerNode = {
+                    expr: quotExpr,
+                    tex: quotTex,
+                    dExpr: dQuotExpr,
+                    parts: [createPart(1, 1, quotTex)],
+                    dParts: [createPart(1, 1, `\\left(${dQuotTex}\\right)`)],
+                    type: 'quotient'
+                };
+                const oType = pickChainOuterType(innerNode, null, v, true);
+                const outer = applySingleChainLayer(innerNode, oType, v, diff);
+
+                const steps = [
+                    `Use the Chain Rule with an inner Quotient Rule: $ \\frac{d}{d${v}}[f(u)] = f'(u) \\cdot u' $`,
+                    `The inner function is $ u = ${quotTex} $`,
+                    `Apply the Quotient Rule to find $ u' = ${dQuotTex} $`,
+                    `Multiply by the outer derivative $ f'(u) = ${partsToTex(outer.dOuterParts)} $`,
+                    `Final Answer (Combine and Simplify): $ ${partsToTex(outer.dParts)} $`
+                ];
+                return { expr: outer.expr, tex: outer.tex, dExpr: outer.dExpr, steps, rules: ['combined'] };
+            }
+
+            // quotient_product: (A * B) / C (optionally with a 1-layer chain node on very hard)
+            const useChain = diff === 'very hard' && rnd(0, 1) === 1;
+            const A = useChain ? buildChainNode(v, diff, 1, true) : getSimpleTerm(v, diff, true);
+            const B = getSimpleTerm(v, diff, true);
+            const C = getSimpleTerm(v, diff, true);
+
+            const hiExpr = `(${A.expr})*(${B.expr})`;
+            const hiTex = `\\left(${A.tex}\\right)\\left(${B.tex}\\right)`;
+            const dHiExpr = `(${A.dExpr})*(${B.expr}) + (${A.expr})*(${B.dExpr})`;
+            const dHiParts = combineSameTex(addParts(
+                multiplyParts(A.dParts, B.parts),
+                multiplyParts(A.parts, B.dParts)
+            ));
+
+            const expr = `(${hiExpr})/(${C.expr})`;
+            const tex = `\\frac{${hiTex}}{${C.tex}}`;
+            const dExpr = `((${dHiExpr})*(${C.expr}) - (${hiExpr})*(${C.dExpr}))/((${C.expr})^2)`;
+
+            const hiParts = multiplyParts(A.parts, B.parts);
+            const term1 = multiplyParts(dHiParts, C.parts);
+            const term2 = multiplyParts(hiParts, C.dParts);
+            const numParts = combineSameTex(subParts(term1, term2));
+            const numTex = partsToTex(numParts);
+            const finalTex = `\\frac{${numTex}}{\\left(${C.tex}\\right)^2}`;
+
             const steps = [
-                `Use the Chain Rule: $ \\frac{d}{d${v}}[f(u)] = f'(u) \\cdot u' $`,
-                `The inner function is $ u = ${partsToTex(innerParts)} $`,
-                `Its derivative is $ u' = ${partsToTex(dInnerParts)} $`,
-                `The derivative of the outer function, leaving the inner function alone, is $ ${partsToTex(dOuterParts)} $`
+                `Use the Quotient Rule and Product Rule${useChain ? ' (with Chain Rule)' : ''}: $ \\frac{d}{d${v}}\\left[\\frac{\\text{Hi}}{\\text{Lo}}\\right] = \\frac{\\text{dHi}\\cdot\\text{Lo} - \\text{Hi}\\cdot\\text{dLo}}{\\text{Lo}^2} $`,
+                `Identify $ \\text{Hi} = ${hiTex} $ and $ \\text{Lo} = ${C.tex} $`,
+                `Use the Product Rule on $ \\text{Hi} $: $ \\text{dHi} = ${partsToTex(dHiParts)} $, and $ \\text{dLo} = ${partsToTex(C.dParts)} $`,
+                `Form the numerator: $ \\text{dHi}\\cdot\\text{Lo} - \\text{Hi}\\cdot\\text{dLo} = ${numTex} $`,
+                `Final Answer: $ ${finalTex} $`
             ];
-            
-            let allDParts;
-            if (oType === 'log') {
-                let iParts = innerParts;
-                let diParts = dInnerParts;
-                
-                // Fix double negatives when combining into a fraction
-                if (iParts.length > 0 && diParts.length > 0 && iParts[0].num < 0 && diParts[0].num < 0) {
-                    iParts = iParts.map(p => createPart(-p.num, p.den, p.tex, p.factors));
-                    diParts = diParts.map(p => createPart(-p.num, p.den, p.tex, p.factors));
-                }
-                
-                const innerTex = partsToTex(iParts);
-                const dInnerTex = partsToTex(diParts);
-                
-                steps.push(`Substitute into the Chain Rule $ f'(u) \\cdot u' $: $ \\left(\\frac{1}{${partsToTex(innerParts)}}\\right) \\cdot \\left(${partsToTex(dInnerParts)}\\right) $`);
-                
-                let uPoly = checkPoly(iParts, v) && iParts.length === 1;
-                let duPoly = checkPoly(diParts, v);
-                if (uPoly && duPoly) {
-                    allDParts = combineLikeTerms(dividePolyParts(diParts, iParts[0], v), v);
-                } else {
-                    if (innerTex === dInnerTex) {
-                        steps.push(`Combine terms: $ \\frac{${dInnerTex}}{${innerTex}} $`);
-                        allDParts = [createPart(1, 1, '')];
-                    } else {
-                        allDParts = [createPart(1, 1, `\\frac{${dInnerTex}}{${innerTex}}`)];
-                    }
-                }
-            } else {
-                steps.push(`Substitute into the Chain Rule $ f'(u) \\cdot u' $: $ \\left(${partsToTex(dOuterParts)}\\right)\\left(${partsToTex(dInnerParts)}\\right) $`);
-                allDParts = multiplyParts(dOuterParts, dInnerParts);
-            }
-            
-            steps.push(`Final Answer (Combine and Simplify): $ ${partsToTex(allDParts)} $`);
-            
-            return { expr, tex, dExpr, steps };
+            return { expr, tex, dExpr, steps, rules: ['combined'] };
         }
     }
 };
@@ -1477,10 +1926,9 @@ function render() {
                 </div>
                 ` : ''}
                 <div class="input-group" style="display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap;">
-                    <button class="btn ${state.selectedRule === 'basic' ? 'selected' : ''}" onclick="selectRule('basic')" style="background: ${state.selectedRule === 'basic' ? '#2563eb' : '#1e293b'}; border: 2px solid ${state.selectedRule === 'basic' ? '#3b82f6' : '#334155'};" ${state.waitingForNext ? 'disabled' : ''}>Basic Rules</button>
-                    <button class="btn ${state.selectedRule === 'product' ? 'selected' : ''}" onclick="selectRule('product')" style="background: ${state.selectedRule === 'product' ? '#2563eb' : '#1e293b'}; border: 2px solid ${state.selectedRule === 'product' ? '#3b82f6' : '#334155'};" ${state.waitingForNext ? 'disabled' : ''}>Product Rule</button>
-                    <button class="btn ${state.selectedRule === 'quotient' ? 'selected' : ''}" onclick="selectRule('quotient')" style="background: ${state.selectedRule === 'quotient' ? '#2563eb' : '#1e293b'}; border: 2px solid ${state.selectedRule === 'quotient' ? '#3b82f6' : '#334155'};" ${state.waitingForNext ? 'disabled' : ''}>Quotient Rule</button>
-                    <button class="btn ${state.selectedRule === 'chain' ? 'selected' : ''}" onclick="selectRule('chain')" style="background: ${state.selectedRule === 'chain' ? '#2563eb' : '#1e293b'}; border: 2px solid ${state.selectedRule === 'chain' ? '#3b82f6' : '#334155'};" ${state.waitingForNext ? 'disabled' : ''}>Chain Rule</button>
+                    ${Object.keys(RULE_LABELS).map(r => `
+                    <button class="btn ${state.selectedRule === r ? 'selected' : ''}" onclick="selectRule('${r}')" style="background: ${state.selectedRule === r ? '#2563eb' : '#1e293b'}; border: 2px solid ${state.selectedRule === r ? '#3b82f6' : '#334155'};" ${state.waitingForNext ? 'disabled' : ''}>${RULE_LABELS[r]}</button>
+                    `).join('')}
                 </div>
                 ` : state.mode === 'quiz' ? `
                 ${state.waitingForNext ? `
@@ -1602,17 +2050,14 @@ function render() {
                     <div class="checkbox-group">
                         ${Object.keys(state.rules).map(rule => {
                             let isLocked = false;
-                            let reqLvl = 1;
+                            let reqLvl = RULE_REQS[rule] || 1;
                             if (state.mode === 'career') {
-                                if (rule === 'product') reqLvl = 2;
-                                if (rule === 'quotient') reqLvl = 4;
-                                if (rule === 'chain') reqLvl = 6;
                                 isLocked = state.level < reqLvl;
                             }
                             return `
                             <label class="${isLocked ? 'locked' : ''}">
                                 <input type="checkbox" id="rule-${rule}" ${state.rules[rule] && !isLocked ? 'checked' : ''} ${isLocked ? 'disabled' : ''} onchange="toggleRule('${rule}')">
-                                ${rule === 'basic' ? 'Basic Rules' : rule.charAt(0).toUpperCase() + rule.slice(1) + ' Rule'} ${isLocked ? '(Lvl ' + reqLvl + ')' : ''}
+                                ${RULE_LABELS[rule] || rule}${rule === 'combined' ? ' <span style="color: #ef4444; font-weight: 700; font-size: 0.9rem;">New</span>' : ''} ${isLocked ? '(Lvl ' + reqLvl + ')' : ''}
                             </label>
                             `;
                         }).join('')}
@@ -1765,8 +2210,7 @@ window.showSolution = function() {
 
 window.toggleRule = function(rule) {
     if (state.mode === 'career') {
-        const ruleReqs = { basic: 1, product: 2, quotient: 4, chain: 6 };
-        if (state.level < (ruleReqs[rule] || 1)) return;
+        if (state.level < (RULE_REQS[rule] || 1)) return;
     }
     state.rules[rule] = !state.rules[rule];
     if (!Object.values(state.rules).some(v => v)) {
@@ -1806,9 +2250,8 @@ window.setMode = function(mode) {
     }
     state.mode = mode;
     if (mode === 'career') {
-        const ruleReqs = { basic: 1, product: 2, quotient: 4, chain: 6 };
-        for (let r in ruleReqs) {
-            if (state.level < ruleReqs[r]) state.rules[r] = false;
+        for (let r in RULE_REQS) {
+            if (state.level < RULE_REQS[r]) state.rules[r] = false;
         }
         if (!Object.values(state.rules).some(v => v)) state.rules.basic = true;
         
@@ -1952,13 +2395,7 @@ function handleSubmit() {
     
     if (state.mode === 'ruleIdentification') {
         if (!state.selectedRule) return;
-        const ruleNames = {
-            basic: 'Basic Rules',
-            product: 'Product Rule',
-            quotient: 'Quotient Rule',
-            chain: 'Chain Rule'
-        };
-        rawInput = ruleNames[state.selectedRule] || state.selectedRule;
+        rawInput = RULE_LABELS[state.selectedRule] || state.selectedRule;
         state.currentInput = rawInput;
         isCorrect = (state.problem.rules || [state.problem.rule]).includes(state.selectedRule);
     } else if (state.mode === 'quiz') {
@@ -2080,8 +2517,75 @@ function handleSubmit() {
     }
 }
 
+// Dev-only sample view: open index.html?sample to preview generated problems per rule/difficulty
+function renderSamplePage() {
+    const params = new URLSearchParams(window.location.search);
+    const perCell = Math.max(1, Math.min(30, parseInt(params.get('n') || '8', 10) || 8));
+    const onlyRule = params.get('rule');
+    const rules = Object.keys(RULE_LABELS).filter(r => !onlyRule || r === onlyRule);
+    const diffs = ['easy', 'medium', 'hard', 'very hard'];
+
+    let html = `
+        <div style="max-width: 1400px; margin: 0 auto; padding: 1.5rem; color: #e2e8f0;">
+            <h1 style="margin-bottom: 0.25rem;">Problem Sampler</h1>
+            <p style="color: #94a3b8; margin-top: 0;">
+                ${perCell} problems per rule &amp; difficulty, generated live from the current code. Refresh for a new batch.
+                Filters: <code>?sample&amp;rule=chain</code>, <code>?sample&amp;n=15</code>.
+                <a href="${window.location.pathname}" style="color: #60a5fa;">Back to app</a>
+            </p>
+            <label style="display: inline-flex; gap: 0.4rem; align-items: center; margin-bottom: 1rem; cursor: pointer;">
+                <input type="checkbox" id="sample-show-answers"> Show answers
+            </label>`;
+
+    for (const rule of rules) {
+        html += `<h2 style="border-bottom: 1px solid #334155; padding-bottom: 0.3rem; margin-top: 2rem;">${RULE_LABELS[rule]}</h2>
+            <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem;">`;
+        for (const diff of diffs) {
+            html += `<div style="background: rgba(30, 41, 59, 0.7); border: 1px solid #334155; border-radius: 8px; padding: 0.75rem; overflow-x: auto;">
+                <h3 style="margin: 0 0 0.5rem; text-transform: capitalize; color: #93c5fd;">${diff}</h3>`;
+            for (let i = 0; i < perCell; i++) {
+                let probTex = '', ansTex = '', err = '';
+                try {
+                    const gen = generators[rule].generate('x', diff);
+                    probTex = gen.tex;
+                    ansTex = getCorrectTex(gen.steps, gen.expr, 'x');
+                } catch (e) {
+                    err = escapeHtml(e && e.message ? e.message : String(e));
+                }
+                html += `<div style="padding: 0.4rem 0; border-top: 1px dashed #334155;">
+                    ${err
+                        ? `<span style="color: #f87171;">Generator error: ${err}</span>`
+                        : `<div class="sample-tex" data-tex="${escapeHtml(probTex)}"></div>
+                           <div class="sample-ans" data-tex="${escapeHtml(ansTex)}" style="display: none; color: #86efac; font-size: 0.85em; margin-top: 0.2rem;"></div>`}
+                </div>`;
+            }
+            html += `</div>`;
+        }
+        html += `</div>`;
+    }
+    html += `</div>`;
+
+    const app = document.getElementById('app');
+    app.innerHTML = html;
+    app.querySelectorAll('.sample-tex, .sample-ans').forEach(el => {
+        try {
+            katex.render(el.dataset.tex, el, { throwOnError: false, displayMode: false });
+        } catch (e) {
+            el.textContent = el.dataset.tex;
+        }
+    });
+    const toggle = document.getElementById('sample-show-answers');
+    toggle.addEventListener('change', () => {
+        app.querySelectorAll('.sample-ans').forEach(el => { el.style.display = toggle.checked ? 'block' : 'none'; });
+    });
+}
+
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
+    if (new URLSearchParams(window.location.search).has('sample')) {
+        renderSamplePage();
+        return;
+    }
     document.addEventListener('keydown', (e) => {
         // Prevent hotkeys from firing if typing in a non-answer input field
         if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') && e.target.id !== 'answer-input') {
@@ -2113,6 +2617,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (e.key === '2') { window.selectRule('product'); return; }
             if (e.key === '3') { window.selectRule('quotient'); return; }
             if (e.key === '4') { window.selectRule('chain'); return; }
+            if (e.key === '5') { window.selectRule('combined'); return; }
         }
         if (state.mode === 'quiz' && !state.gameOver && !state.waitingForNext) {
             const k = e.key.toUpperCase();
